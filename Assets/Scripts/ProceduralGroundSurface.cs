@@ -12,7 +12,7 @@ public class ProceduralGroundSurface : MonoBehaviour
 
     public Vector2 size = new Vector2(10f, 10f);
 
-    public float seaLevel = 0.05f;
+    public float seaLevel = -4f;
 
     [Header("Terrain Shape")]
     public float baseOceanDepth = 1.4f;
