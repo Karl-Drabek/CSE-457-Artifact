@@ -3,7 +3,9 @@
 // "Low Poly Water" package source in Assets/LowPolyWater_Pack, originally from:
 // https://assetstore.unity.com/packages/tools/particles-effects/lowpoly-water-107563
 // It is intentionally simplified for this project and is not a direct copy.
+using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [ExecuteAlways]
 [AddComponentMenu("Water/URP Low Poly Water")]
@@ -12,6 +14,32 @@ public class UrpLowPolyWater : MonoBehaviour
 {
     const string LegacyShaderPrefix = "LowPolyWater/";
     const int MaxGeneratedPlaneSearchRadius = 4;
+
+    [Serializable]
+    public struct GerstnerWave
+    {
+        public Vector2 direction;
+
+        [Min(0f)]
+        public float amplitude;
+
+        [Min(0.001f)]
+        public float waveLength;
+
+        public float speed;
+
+        [Range(0f, 1f)]
+        public float steepness;
+
+        public GerstnerWave(Vector2 direction, float amplitude, float waveLength, float speed, float steepness)
+        {
+            this.direction = direction;
+            this.amplitude = Mathf.Max(0f, amplitude);
+            this.waveLength = Mathf.Max(0.001f, waveLength);
+            this.speed = speed;
+            this.steepness = Mathf.Clamp01(steepness);
+        }
+    }
 
     public static UrpLowPolyWater ActiveSurface { get; private set; }
 
@@ -23,33 +51,42 @@ public class UrpLowPolyWater : MonoBehaviour
 
     public float baseHeight = 0.05f;
 
-    [Header("Primary Gerstner Wave")]
-    public Vector2 primaryDirection = new Vector2(1f, 0.35f);
+    [Header("Gerstner Waves")]
+    public GerstnerWave[] waves = Array.Empty<GerstnerWave>();
 
-    [Min(0.001f)]
-    public float primaryAmplitude = 0.35f;
+    // Hidden legacy fields preserve older scenes authored before waves became a variable-size list.
+    [SerializeField, HideInInspector]
+    Vector2 primaryDirection = new Vector2(1f, 0.35f);
 
-    [Min(0.001f)]
-    public float primaryWaveLength = 4f;
+    [SerializeField, HideInInspector, Min(0f)]
+    float primaryAmplitude = 0.35f;
 
-    public float primarySpeed = 1.25f;
+    [SerializeField, HideInInspector, Min(0.001f)]
+    float primaryWaveLength = 4f;
 
-    [Range(0f, 1f)]
-    public float primarySteepness = 0.35f;
+    [SerializeField, HideInInspector]
+    float primarySpeed = 1.25f;
 
-    [Header("Secondary Gerstner Wave")]
-    public Vector2 secondaryDirection = new Vector2(-0.55f, 0.85f);
+    [SerializeField, HideInInspector, Range(0f, 1f)]
+    float primarySteepness = 0.35f;
 
-    [Min(0f)]
-    public float secondaryAmplitude = 0.18f;
+    [SerializeField, HideInInspector]
+    Vector2 secondaryDirection = new Vector2(-0.55f, 0.85f);
 
-    [Min(0.001f)]
-    public float secondaryWaveLength = 2.25f;
+    [SerializeField, HideInInspector, Min(0f)]
+    float secondaryAmplitude = 0.18f;
 
-    public float secondarySpeed = 1.7f;
+    [SerializeField, HideInInspector, Min(0.001f)]
+    float secondaryWaveLength = 2.25f;
 
-    [Range(0f, 1f)]
-    public float secondarySteepness = 0.2f;
+    [SerializeField, HideInInspector]
+    float secondarySpeed = 1.7f;
+
+    [SerializeField, HideInInspector, Range(0f, 1f)]
+    float secondarySteepness = 0.2f;
+
+    [SerializeField, HideInInspector, FormerlySerializedAs("legacyWaveSettingsUpgraded")]
+    bool legacyWaveSettingsMigrated;
 
     [Header("Rendering")]
     [SerializeField]
@@ -78,7 +115,16 @@ public class UrpLowPolyWater : MonoBehaviour
     // Grabs component references and prepares the runtime mesh/material state.
     void Awake()
     {
+        PrepareWaveSettings();
         Initialize();
+    }
+
+    // Called by Unity when the component is first added or reset from the Inspector.
+    // Seeds the wave list with the same two defaults older scenes used.
+    void Reset()
+    {
+        waves = CreateLegacyWaveArray();
+        legacyWaveSettingsMigrated = true;
     }
 
     // Called by Unity when the component becomes active.
@@ -86,6 +132,7 @@ public class UrpLowPolyWater : MonoBehaviour
     void OnEnable()
     {
         ActiveSurface = this;
+        PrepareWaveSettings();
         Initialize();
         AnimateMesh(Application.isPlaying ? Time.time : 0f);
     }
@@ -94,6 +141,7 @@ public class UrpLowPolyWater : MonoBehaviour
     // Rebuilds the water mesh immediately so Inspector edits preview without entering play mode.
     void OnValidate()
     {
+        PrepareWaveSettings();
         Initialize();
         AnimateMesh(Application.isPlaying ? Time.time : 0f);
     }
@@ -135,8 +183,63 @@ public class UrpLowPolyWater : MonoBehaviour
         materialOverride = assignedMaterial;
         useGeneratedPlane = true;
 
+        PrepareWaveSettings();
         Initialize();
         AnimateMesh(Application.isPlaying ? Time.time : 0f);
+    }
+
+    // Migrates older two-wave setups and keeps each wave inside safe numeric ranges.
+    void PrepareWaveSettings()
+    {
+        UpgradeLegacyWaveSettings();
+        SanitizeWaveSettings();
+    }
+
+    // Copies the old primary/secondary wave fields into the new resizable wave list once.
+    void UpgradeLegacyWaveSettings()
+    {
+        if (legacyWaveSettingsMigrated)
+        {
+            return;
+        }
+
+        if (waves != null && waves.Length > 0)
+        {
+            legacyWaveSettingsMigrated = true;
+            return;
+        }
+
+        waves = CreateLegacyWaveArray();
+        legacyWaveSettingsMigrated = true;
+    }
+
+    // Normalizes the new wave list so a bad value in the Inspector cannot destabilize the surface math.
+    void SanitizeWaveSettings()
+    {
+        if (waves == null)
+        {
+            waves = Array.Empty<GerstnerWave>();
+            return;
+        }
+
+        for (int i = 0; i < waves.Length; i++)
+        {
+            GerstnerWave wave = waves[i];
+            wave.amplitude = Mathf.Max(0f, wave.amplitude);
+            wave.waveLength = Mathf.Max(0.001f, wave.waveLength);
+            wave.steepness = Mathf.Clamp01(wave.steepness);
+            waves[i] = wave;
+        }
+    }
+
+    // Builds the default two-wave set used before the water system supported an arbitrary wave count.
+    GerstnerWave[] CreateLegacyWaveArray()
+    {
+        return new[]
+        {
+            new GerstnerWave(primaryDirection, primaryAmplitude, primaryWaveLength, primarySpeed, primarySteepness),
+            new GerstnerWave(secondaryDirection, secondaryAmplitude, secondaryWaveLength, secondarySpeed, secondarySteepness)
+        };
     }
 
     // Shared setup path used by Unity callbacks and SyncFromWorld.
@@ -536,7 +639,7 @@ public class UrpLowPolyWater : MonoBehaviour
         return true;
     }
 
-    // Evaluates the Gerstner water surface at one source vertex.
+    // Evaluates the current multi-wave Gerstner surface at one source vertex.
     // Called by mesh animation and analytic fallback sampling so both paths share the same implementation.
     Vector3 EvaluateSurfacePoint(Vector3 sourceVertex, float timeSeconds)
     {
@@ -544,63 +647,42 @@ public class UrpLowPolyWater : MonoBehaviour
         Vector2 anchorXZ = new Vector2(sourceVertex.x, sourceVertex.z);
         int waveCount = GetActiveWaveCount();
 
-        ApplyGerstnerWave(
-            ref surfacePoint,
-            anchorXZ,
-            timeSeconds,
-            primaryDirection,
-            primaryAmplitude,
-            primaryWaveLength,
-            primarySpeed,
-            primarySteepness,
-            waveCount);
-
-        ApplyGerstnerWave(
-            ref surfacePoint,
-            anchorXZ,
-            timeSeconds,
-            secondaryDirection,
-            secondaryAmplitude,
-            secondaryWaveLength,
-            secondarySpeed,
-            secondarySteepness,
-            waveCount);
+        for (int i = 0; i < waves.Length; i++)
+        {
+            ApplyGerstnerWave(ref surfacePoint, anchorXZ, timeSeconds, waves[i], waveCount);
+        }
 
         return surfacePoint;
     }
 
     // Adds one Gerstner wave contribution into a displaced surface point.
-    // Called by EvaluateSurfacePoint for the primary and secondary waves.
+    // Called by EvaluateSurfacePoint while iterating over the configurable wave list.
     void ApplyGerstnerWave(
         ref Vector3 surfacePoint,
         Vector2 anchorXZ,
         float timeSeconds,
-        Vector2 direction,
-        float amplitude,
-        float waveLength,
-        float speed,
-        float steepness,
+        GerstnerWave wave,
         int totalWaveCount)
     {
-        if (amplitude <= 0f)
+        if (wave.amplitude <= 0f)
         {
             return;
         }
 
-        Vector2 normalizedDirection = NormalizeDirection(direction);
-        float safeWaveLength = Mathf.Max(0.001f, waveLength);
+        Vector2 normalizedDirection = NormalizeDirection(wave.direction);
+        float safeWaveLength = Mathf.Max(0.001f, wave.waveLength);
         float waveNumber = Mathf.PI * 2f / safeWaveLength;
-        float clampedSteepness = Mathf.Clamp01(steepness);
+        float clampedSteepness = Mathf.Clamp01(wave.steepness);
         float horizontalFactor = Mathf.Min(
             1f,
-            clampedSteepness / Mathf.Max(waveNumber * amplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
-        float phase = waveNumber * Vector2.Dot(normalizedDirection, anchorXZ) + timeSeconds * speed;
+            clampedSteepness / Mathf.Max(waveNumber * wave.amplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
+        float phase = waveNumber * Vector2.Dot(normalizedDirection, anchorXZ) + timeSeconds * wave.speed;
         float cosine = Mathf.Cos(phase);
         float sine = Mathf.Sin(phase);
 
-        surfacePoint.x += normalizedDirection.x * (horizontalFactor * amplitude * cosine);
-        surfacePoint.z += normalizedDirection.y * (horizontalFactor * amplitude * cosine);
-        surfacePoint.y += amplitude * sine;
+        surfacePoint.x += normalizedDirection.x * (horizontalFactor * wave.amplitude * cosine);
+        surfacePoint.z += normalizedDirection.y * (horizontalFactor * wave.amplitude * cosine);
+        surfacePoint.y += wave.amplitude * sine;
     }
 
     // Computes barycentric coordinates for a 2D point inside one generated water triangle.
@@ -650,20 +732,18 @@ public class UrpLowPolyWater : MonoBehaviour
         return new Vector2(baseHalfSize.x + horizontalPadding, baseHalfSize.y + horizontalPadding);
     }
 
-    // Returns the total number of enabled Gerstner waves contributing to the surface.
+    // Returns the number of enabled Gerstner waves contributing to the surface.
     // Called when scaling steepness so the combined wave set stays stable.
     int GetActiveWaveCount()
     {
         int waveCount = 0;
 
-        if (primaryAmplitude > 0f)
+        for (int i = 0; i < waves.Length; i++)
         {
-            waveCount++;
-        }
-
-        if (secondaryAmplitude > 0f)
-        {
-            waveCount++;
+            if (waves[i].amplitude > 0f)
+            {
+                waveCount++;
+            }
         }
 
         return Mathf.Max(waveCount, 1);
@@ -676,14 +756,17 @@ public class UrpLowPolyWater : MonoBehaviour
         int waveCount = GetActiveWaveCount();
         float maxDisplacement = 0f;
 
-        maxDisplacement += ComputeWaveHorizontalDisplacement(primaryAmplitude, primaryWaveLength, primarySteepness, waveCount);
-        maxDisplacement += ComputeWaveHorizontalDisplacement(secondaryAmplitude, secondaryWaveLength, secondarySteepness, waveCount);
+        for (int i = 0; i < waves.Length; i++)
+        {
+            GerstnerWave wave = waves[i];
+            maxDisplacement += ComputeWaveHorizontalDisplacement(wave.amplitude, wave.waveLength, wave.steepness, waveCount);
+        }
 
         return maxDisplacement;
     }
 
     // Computes the horizontal displacement bound for one Gerstner wave.
-    // Called by ComputeMaxHorizontalDisplacement for the primary and secondary waves.
+    // Called by ComputeMaxHorizontalDisplacement while summing the active wave list.
     float ComputeWaveHorizontalDisplacement(float amplitude, float waveLength, float steepness, int totalWaveCount)
     {
         if (amplitude <= 0f)
@@ -704,7 +787,14 @@ public class UrpLowPolyWater : MonoBehaviour
     // Called while rebuilding runtime mesh bounds.
     float ComputeCombinedWaveAmplitude()
     {
-        return Mathf.Max(0f, primaryAmplitude) + Mathf.Max(0f, secondaryAmplitude);
+        float totalAmplitude = 0f;
+
+        for (int i = 0; i < waves.Length; i++)
+        {
+            totalAmplitude += Mathf.Max(0f, waves[i].amplitude);
+        }
+
+        return totalAmplitude;
     }
 
     // Chooses a small local-space step for analytic normal sampling.
