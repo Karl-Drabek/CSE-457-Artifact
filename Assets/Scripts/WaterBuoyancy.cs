@@ -7,6 +7,8 @@ using UnityEngine.Serialization;
 public class WaterBuoyancy : MonoBehaviour
 {
     const float MinDensity = 0.0001f;
+    const float MinSubmergenceRange = 0.001f;
+    const float MinWeightSum = 0.0001f;
     const float DefaultEdgeInset = 0.08f;
 
     [Serializable]
@@ -30,15 +32,38 @@ public class WaterBuoyancy : MonoBehaviour
         Raycast
     }
 
+    static readonly SamplePoint[] FallbackSamplePoints =
+    {
+        new SamplePoint(new Vector3(-0.4f, -0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(0f, -0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(0.4f, -0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(-0.4f, -0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(0f, -0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(0.4f, -0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(-0.4f, -0.4f, 0.4f), 1f),
+        new SamplePoint(new Vector3(0f, -0.4f, 0.4f), 1f),
+        new SamplePoint(new Vector3(0.4f, -0.4f, 0.4f), 1f),
+        new SamplePoint(new Vector3(-0.4f, 0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(0f, 0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(0.4f, 0.4f, -0.4f), 1f),
+        new SamplePoint(new Vector3(-0.4f, 0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(0f, 0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(0.4f, 0.4f, 0f), 1f),
+        new SamplePoint(new Vector3(-0.4f, 0.4f, 0.4f), 1f),
+        new SamplePoint(new Vector3(0f, 0.4f, 0.4f), 1f),
+        new SamplePoint(new Vector3(0.4f, 0.4f, 0.4f), 1f)
+    };
+
     [SerializeField]
     // Auto-generated points usually behave better than hand-placed ones for boxy objects.
     bool autoGenerateSamplePoints = true;
 
     [SerializeField]
-    SamplePoint[] manualSamplePoints = new SamplePoint[0];
+    SamplePoint[] manualSamplePoints = Array.Empty<SamplePoint>();
 
+    // Hidden migration fields keep older scenes loading after the sampling redesign.
     [SerializeField, HideInInspector, FormerlySerializedAs("samplePoints")]
-    Vector3[] legacySamplePoints = new Vector3[0];
+    Vector3[] legacySamplePoints = Array.Empty<Vector3>();
 
     [FormerlySerializedAs("fluidDensity")]
     [FormerlySerializedAs("density")]
@@ -84,47 +109,26 @@ public class WaterBuoyancy : MonoBehaviour
     float legacySampleEdgeInset = DefaultEdgeInset;
 
     Rigidbody body;
-    Collider[] cachedColliders = new Collider[0];
-    SamplePoint[] autoSamplePoints = new SamplePoint[0];
+    Collider[] cachedColliders = Array.Empty<Collider>();
+    SamplePoint[] autoSamplePoints = Array.Empty<SamplePoint>();
 
-    // Called by Unity before the first physics update if the component starts enabled.
-    // Caches required components and prepares the current buoyancy sample layout.
     void Awake()
     {
-        EnsureSetup();
-        UpgradeLegacyManualSamplePoints();
-        UpgradeLegacyInsetSettings();
-        SanitizeSampleSettings();
-        RefreshAutoSamplePoints();
+        RefreshState();
     }
 
-    // Called by Unity when the component becomes active.
-    // Refreshes references and sample points in case the object changed while disabled.
     void OnEnable()
     {
-        EnsureSetup();
-        UpgradeLegacyManualSamplePoints();
-        UpgradeLegacyInsetSettings();
-        SanitizeSampleSettings();
-        RefreshAutoSamplePoints();
+        RefreshState();
     }
 
-    // Called by Unity in the editor when serialized fields change.
-    // Rebuilds the sample layout immediately so gizmos and buoyancy settings stay accurate.
     void OnValidate()
     {
-        EnsureSetup();
-        UpgradeLegacyManualSamplePoints();
-        UpgradeLegacyInsetSettings();
-        SanitizeSampleSettings();
-        RefreshAutoSamplePoints();
+        RefreshState();
     }
 
-    // Called by Unity when the component is first added or reset from the Inspector.
-    // Starts with neutral object density where 1 means the object matches the water density.
     void Reset()
     {
-        EnsureSetup();
         objectDensity = 1f;
         sampleMode = SampleMode.Raycast;
         verticalEdgeInset = DefaultEdgeInset;
@@ -132,11 +136,9 @@ public class WaterBuoyancy : MonoBehaviour
         xEdgeOffset = 0f;
         zEdgeOffset = 0f;
 
-        RefreshAutoSamplePoints();
+        RefreshState();
     }
 
-    // Called by Unity once per physics step.
-    // Samples the water surface, applies distributed buoyancy, then adds whole-body water damping.
     void FixedUpdate()
     {
         if (body == null)
@@ -144,19 +146,13 @@ public class WaterBuoyancy : MonoBehaviour
             return;
         }
 
-        UrpLowPolyWater water = UrpLowPolyWater.ActiveSurface;
-        if (water == null)
+        if (!TryResolveWaterSurface(out UrpLowPolyWater water))
         {
-            // Fall back to a scene search in case the active surface was not registered yet.
-            water = FindAnyObjectByType<UrpLowPolyWater>();
-            if (water == null)
-            {
-                return;
-            }
+            return;
         }
 
         SamplePoint[] activeSamplePoints = GetActiveSamplePoints();
-        if (activeSamplePoints == null || activeSamplePoints.Length == 0)
+        if (activeSamplePoints.Length == 0)
         {
             return;
         }
@@ -191,7 +187,7 @@ public class WaterBuoyancy : MonoBehaviour
                 continue;
             }
 
-            float submergence = Mathf.Clamp01(submergenceDepth / Mathf.Max(maxSubmergence, 0.001f));
+            float submergence = Mathf.Clamp01(submergenceDepth / Mathf.Max(maxSubmergence, MinSubmergenceRange));
             submergedFractionSum += submergence * normalizedWeight;
             hasSubmergedPoint = true;
 
@@ -220,16 +216,37 @@ public class WaterBuoyancy : MonoBehaviour
         }
     }
 
-    // Caches the rigidbody and collider set used by the buoyancy calculations.
-    // Called by Unity lifecycle methods before generating sample points or applying forces.
+    // Rebuilds cached references, upgrades older serialized data, and refreshes auto samples.
+    void RefreshState()
+    {
+        EnsureSetup();
+        UpgradeLegacyManualSamplePoints();
+        UpgradeLegacyInsetSettings();
+        SanitizeSampleSettings();
+        RefreshAutoSamplePoints();
+    }
+
+    // Finds the active water surface, with a scene lookup fallback for editor setup order issues.
+    bool TryResolveWaterSurface(out UrpLowPolyWater water)
+    {
+        water = UrpLowPolyWater.ActiveSurface;
+        if (water != null)
+        {
+            return true;
+        }
+
+        water = FindAnyObjectByType<UrpLowPolyWater>();
+        return water != null;
+    }
+
+    // Caches the rigidbody and collider set used by buoyancy and sample generation.
     void EnsureSetup()
     {
         body = GetComponent<Rigidbody>();
         cachedColliders = GetComponentsInChildren<Collider>();
     }
 
-    // Converts legacy position-only manual samples into weighted samples.
-    // Called from Unity setup hooks so existing scenes keep their authored points.
+    // Converts older position-only sample data into the current weighted manual format.
     void UpgradeLegacyManualSamplePoints()
     {
         if ((manualSamplePoints != null && manualSamplePoints.Length > 0)
@@ -245,10 +262,10 @@ public class WaterBuoyancy : MonoBehaviour
             manualSamplePoints[i] = new SamplePoint(legacySamplePoints[i], 1f);
         }
 
-        legacySamplePoints = new Vector3[0];
+        legacySamplePoints = Array.Empty<Vector3>();
     }
 
-    // Copies the old single inset setting into the split vertical/horizontal inset values.
+    // Copies the old single inset setting into the newer horizontal and vertical fields once.
     void UpgradeLegacyInsetSettings()
     {
         if (!Mathf.Approximately(verticalEdgeInset, DefaultEdgeInset)
@@ -262,15 +279,14 @@ public class WaterBuoyancy : MonoBehaviour
         horizontalEdgeInset = legacySampleEdgeInset;
     }
 
-    // Makes sure manual sample weights and scalar settings stay inside valid ranges.
-    // Called during editor validation and startup before sampling or force application.
+    // Clamps serialized settings into safe ranges before they are used at runtime or in gizmos.
     void SanitizeSampleSettings()
     {
         objectDensity = Mathf.Max(MinDensity, objectDensity);
 
         if (manualSamplePoints == null)
         {
-            manualSamplePoints = new SamplePoint[0];
+            manualSamplePoints = Array.Empty<SamplePoint>();
         }
         else
         {
@@ -290,16 +306,15 @@ public class WaterBuoyancy : MonoBehaviour
         verticalSampleCount = Mathf.Max(2, verticalSampleCount);
     }
 
-    // Returns either the user-authored weighted points or the current auto-generated layout.
-    // Called from the physics loop and gizmo drawing so both systems use the same points.
+    // Returns the currently active point set so physics and gizmos stay in sync.
     SamplePoint[] GetActiveSamplePoints()
     {
         if (!autoGenerateSamplePoints)
         {
-            return manualSamplePoints ?? new SamplePoint[0];
+            return manualSamplePoints;
         }
 
-        if (autoSamplePoints == null || autoSamplePoints.Length == 0)
+        if (autoSamplePoints.Length == 0)
         {
             RefreshAutoSamplePoints();
         }
@@ -307,14 +322,13 @@ public class WaterBuoyancy : MonoBehaviour
         return autoSamplePoints;
     }
 
-    // Water density is fixed at 1, so object density alone determines the displaced water mass.
-    // Rigidbody mass still controls the object's weight through Unity's normal gravity.
+    // Water density is fixed at 1, so a denser object displaces less water for the same rigidbody mass.
     float GetFullSubmersionBuoyancyStrength()
     {
-        return Mathf.Max(0f, body.mass) / Mathf.Max(MinDensity, objectDensity);
+        return Mathf.Max(0f, body.mass) / objectDensity;
     }
 
-    // Sums all positive point weights so manual samples can split buoyancy proportionally.
+    // Sums the positive weights used to divide buoyancy across manual points.
     float GetTotalWeight(SamplePoint[] samplePoints)
     {
         if (samplePoints == null)
@@ -331,7 +345,7 @@ public class WaterBuoyancy : MonoBehaviour
         return totalWeight;
     }
 
-    // Converts an individual sample weight into its normalized share of the total buoyancy.
+    // Converts one point weight into a normalized share of the overall buoyancy force.
     float GetNormalizedWeight(float pointWeight, float totalWeight, int sampleCount)
     {
         if (sampleCount <= 0)
@@ -339,7 +353,7 @@ public class WaterBuoyancy : MonoBehaviour
             return 0f;
         }
 
-        if (totalWeight <= 0.0001f)
+        if (totalWeight <= MinWeightSum)
         {
             return 1f / sampleCount;
         }
@@ -347,22 +361,20 @@ public class WaterBuoyancy : MonoBehaviour
         return Mathf.Max(0f, pointWeight) / totalWeight;
     }
 
-    // Rebuilds the auto-generated sample layout from the object's collider bounds.
-    // Called after setup changes so buoyancy forces remain distributed across the current shape.
+    // Rebuilds the currently selected auto-generated sample layout from this object's colliders.
     void RefreshAutoSamplePoints()
     {
         EnsureSetup();
 
         if (cachedColliders == null || cachedColliders.Length == 0)
         {
-            autoSamplePoints = CreateFallbackSamplePoints();
+            autoSamplePoints = FallbackSamplePoints;
             return;
         }
 
-        Bounds worldBounds = GetCombinedWorldBounds();
-        if (worldBounds.size == Vector3.zero)
+        if (!TryGetCombinedWorldBounds(out Bounds worldBounds))
         {
-            autoSamplePoints = CreateFallbackSamplePoints();
+            autoSamplePoints = FallbackSamplePoints;
             return;
         }
 
@@ -373,13 +385,13 @@ public class WaterBuoyancy : MonoBehaviour
             ? GenerateRaycastSamplePoints(worldBounds, safeHorizontalCount, horizontalEdgeInset, xEdgeOffset, zEdgeOffset)
             : GenerateLatticePoints(worldBounds, safeHorizontalCount, safeVerticalCount, verticalEdgeInset, horizontalEdgeInset);
 
-        if (autoSamplePoints == null || autoSamplePoints.Length == 0)
+        if (autoSamplePoints.Length == 0)
         {
-            autoSamplePoints = CreateFallbackSamplePoints();
+            autoSamplePoints = FallbackSamplePoints;
         }
     }
 
-    // Projects sampling columns upward through this object's colliders and keeps only hits on the object itself.
+    // Builds a surface-following sample grid by raycasting upward through this object's colliders.
     SamplePoint[] GenerateRaycastSamplePoints(Bounds worldBounds, int safeHorizontalCount, float inset, float xOffset, float zOffset)
     {
         float rayStartY = worldBounds.min.y - 0.5f;
@@ -409,7 +421,7 @@ public class WaterBuoyancy : MonoBehaviour
         return generatedPoints.ToArray();
     }
 
-    // Fills the collider bounds volume with a 3D point lattice for boxier or fully volumetric sampling.
+    // Fills the collider bounds with a 3D lattice, which works well for simple volumetric shapes.
     SamplePoint[] GenerateLatticePoints(Bounds worldBounds, int safeHorizontalCount, int safeVerticalCount, float verticalInset, float horizontalInset)
     {
         List<SamplePoint> generatedPoints = new List<SamplePoint>(safeHorizontalCount * safeHorizontalCount * safeVerticalCount);
@@ -436,7 +448,7 @@ public class WaterBuoyancy : MonoBehaviour
         return generatedPoints.ToArray();
     }
 
-    // Finds the nearest upward raycast hit that belongs to this object rather than another collider in the scene.
+    // Keeps raycast sampling from snapping to unrelated colliders outside this buoyancy hierarchy.
     bool TryGetOwnRaycastHit(Vector3 rayOrigin, float rayLength, out RaycastHit closestHit)
     {
         RaycastHit[] hits = Physics.RaycastAll(rayOrigin, Vector3.up, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
@@ -460,7 +472,7 @@ public class WaterBuoyancy : MonoBehaviour
         return foundHit;
     }
 
-    // Returns true when a collider belongs to the cached buoyancy body hierarchy.
+    // Returns true when a collider belongs to this buoyancy object or one of its children.
     bool IsOwnedCollider(Collider collider)
     {
         if (collider == null || cachedColliders == null)
@@ -468,22 +480,14 @@ public class WaterBuoyancy : MonoBehaviour
             return false;
         }
 
-        for (int i = 0; i < cachedColliders.Length; i++)
-        {
-            if (cachedColliders[i] == collider)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return Array.IndexOf(cachedColliders, collider) >= 0;
     }
 
-    // Combines all non-trigger collider bounds into one world-space box for automatic sample generation.
-    Bounds GetCombinedWorldBounds()
+    // Combines all non-trigger collider bounds into one world-space box for auto-sample generation.
+    bool TryGetCombinedWorldBounds(out Bounds combined)
     {
         bool hasBounds = false;
-        Bounds combined = default;
+        combined = default;
 
         for (int i = 0; i < cachedColliders.Length; i++)
         {
@@ -504,46 +508,22 @@ public class WaterBuoyancy : MonoBehaviour
             }
         }
 
-        return combined;
+        return hasBounds;
     }
 
-    // Returns a simple box-shaped sample set when there are no non-trigger colliders to inspect.
-    // Called as a fallback so buoyancy can still operate in a basic way on incomplete objects.
-    SamplePoint[] CreateFallbackSamplePoints()
-    {
-        // Fallback points approximate a small box volume when there are no colliders to sample from.
-        return new[]
-        {
-            new SamplePoint(new Vector3(-0.4f, -0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(0f, -0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(0.4f, -0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(-0.4f, -0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(0f, -0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(0.4f, -0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(-0.4f, -0.4f, 0.4f), 1f),
-            new SamplePoint(new Vector3(0f, -0.4f, 0.4f), 1f),
-            new SamplePoint(new Vector3(0.4f, -0.4f, 0.4f), 1f),
-            new SamplePoint(new Vector3(-0.4f, 0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(0f, 0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(0.4f, 0.4f, -0.4f), 1f),
-            new SamplePoint(new Vector3(-0.4f, 0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(0f, 0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(0.4f, 0.4f, 0f), 1f),
-            new SamplePoint(new Vector3(-0.4f, 0.4f, 0.4f), 1f),
-            new SamplePoint(new Vector3(0f, 0.4f, 0.4f), 1f),
-            new SamplePoint(new Vector3(0.4f, 0.4f, 0.4f), 1f)
-        };
-    }
-
-    // Called by Unity when the object is selected in the Scene view.
-    // Draws the effective sample points so buoyancy layout issues are easy to debug visually.
+    // Draws the effective point layout so sample placement is visible while tuning buoyancy.
     void OnDrawGizmosSelected()
     {
+        if (!Application.isPlaying && autoGenerateSamplePoints && autoSamplePoints.Length == 0)
+        {
+            RefreshAutoSamplePoints();
+        }
+
         SamplePoint[] activeSamplePoints = Application.isPlaying
             ? GetActiveSamplePoints()
             : (autoGenerateSamplePoints ? autoSamplePoints : manualSamplePoints);
 
-        if (activeSamplePoints == null)
+        if (activeSamplePoints == null || activeSamplePoints.Length == 0)
         {
             return;
         }

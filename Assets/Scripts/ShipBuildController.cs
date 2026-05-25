@@ -9,7 +9,7 @@ public class ShipBuildController : MonoBehaviour
     [SerializeField]
     private GameObject obj;
 
-    private Camera camera;
+    private Camera mainCamera;
     public static ShipBuildController Instance;
 
     private InputAction leftClick;
@@ -30,14 +30,14 @@ public class ShipBuildController : MonoBehaviour
 
     void Awake()
     {
-        camera = Camera.main;
+        mainCamera = Camera.main;
         Instance = this;
     }
 
     // Update is called once per frame
     void Update()
     {
-        if (camera == null || obj == null)
+        if (mainCamera == null || obj == null)
         {
             return;
         }
@@ -86,7 +86,7 @@ public class ShipBuildController : MonoBehaviour
 
     public static bool CameraToMouseRay(out RaycastHit RayHit)
     {
-        Ray ray = Instance.camera.ScreenPointToRay(Mouse.current.position.ReadValue());
+        Ray ray = Instance.mainCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
         return Physics.Raycast(ray, out RayHit);
         //return false;
 

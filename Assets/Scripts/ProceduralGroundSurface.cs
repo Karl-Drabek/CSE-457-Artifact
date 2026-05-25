@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 [ExecuteAlways]
 [AddComponentMenu("World/Procedural Ground Surface")]
@@ -12,7 +13,8 @@ public class ProceduralGroundSurface : MonoBehaviour
 
     public Vector2 size = new Vector2(10f, 10f);
 
-    public float seaLevel = -4f;
+    [FormerlySerializedAs("seaLevel")]
+    public float baseHeight = -1.35f;
 
     [Header("Terrain Shape")]
     public float baseOceanDepth = 1.4f;
@@ -57,13 +59,13 @@ public class ProceduralGroundSurface : MonoBehaviour
 
     // Called by World whenever the generated ground object is rebuilt.
     // Copies world-owned settings into this component before rebuilding the terrain mesh.
-    public void SyncFromWorld(int newResolution, Vector2 newSize, float newSeaLevel)
+    public void SyncFromWorld(int newResolution, Vector2 newSize, float newBaseHeight)
     {
         resolution = Mathf.Max(2, newResolution);
         size = new Vector2(
             Mathf.Max(0.01f, newSize.x),
             Mathf.Max(0.01f, newSize.y));
-        seaLevel = newSeaLevel;
+        baseHeight = newBaseHeight;
 
         Initialize();
         RebuildMesh();
@@ -91,7 +93,7 @@ public class ProceduralGroundSurface : MonoBehaviour
     }
 
     // Rebuilds the terrain mesh from the current procedural height field.
-    // Called after initialization whenever resolution, size, sea level, or noise settings change.
+    // Called after initialization whenever resolution, size, height, or noise settings change.
     void RebuildMesh()
     {
         if (generatedMesh == null)
@@ -160,11 +162,12 @@ public class ProceduralGroundSurface : MonoBehaviour
         Vector2 position = new Vector2(x, z);
 
         // Keep the function easy to read:
-        // start below sea level, add a broad shape layer, then add a smaller detail layer.
+        // start from the configured terrain height, add a broad shape layer, then add a smaller detail layer.
         float broadShape = FractalNoise2D(position * broadNoiseScale) * 2f - 1f;
         float detailShape = FractalNoise2D(position * detailNoiseScale + new Vector2(37.1f, 61.7f)) * 2f - 1f;
 
-        float terrainHeight = seaLevel - baseOceanDepth;
+        float terrainHeight = baseHeight;
+        terrainHeight -= baseOceanDepth;
         terrainHeight += broadShape * broadNoiseStrength;
         terrainHeight += detailShape * detailNoiseStrength;
         return terrainHeight;

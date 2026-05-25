@@ -4,12 +4,10 @@ public class MoveableObject : MonoBehaviour
 {
     private bool selected;
     private Vector3 startingPos;
-    private Collider collider;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        collider = GetComponent<Collider>();
         selected = false;
         startingPos = transform.position;
     }

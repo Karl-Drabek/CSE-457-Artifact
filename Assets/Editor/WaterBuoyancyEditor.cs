@@ -4,6 +4,14 @@ using UnityEngine;
 [CustomEditor(typeof(WaterBuoyancy))]
 sealed class WaterBuoyancyEditor : Editor
 {
+    const float WeightEpsilon = 0.0001f;
+    const float MoveHandleSizeScale = 0.08f;
+    const float PlacementPreviewSizeScale = 0.09f;
+    const float GeometryEpsilon = 0.000001f;
+
+    static readonly Color ManualPointColor = new Color(0.15f, 0.8f, 1f, 0.95f);
+    static readonly Color PlacementPreviewColor = new Color(0.25f, 0.95f, 1f, 0.95f);
+
     enum InspectorSamplingMode
     {
         Lattice,
@@ -40,6 +48,8 @@ sealed class WaterBuoyancyEditor : Editor
     bool pointEditingEnabled;
     Mesh bakedSkinnedMesh;
 
+    WaterBuoyancy TargetBuoyancy => (WaterBuoyancy)target;
+
     void OnEnable()
     {
         autoGenerateSamplePointsProperty = serializedObject.FindProperty("autoGenerateSamplePoints");
@@ -69,8 +79,7 @@ sealed class WaterBuoyancyEditor : Editor
 
     void OnDisable()
     {
-        scenePlacementEnabled = false;
-        pointEditingEnabled = false;
+        DisableSceneTools();
 
         if (bakedSkinnedMesh != null)
         {
@@ -106,8 +115,7 @@ sealed class WaterBuoyancyEditor : Editor
 
         if (inspectorSamplingMode == InspectorSamplingMode.Lattice)
         {
-            scenePlacementEnabled = false;
-            pointEditingEnabled = false;
+            DisableSceneTools();
             EditorGUILayout.PropertyField(horizontalSampleCountProperty);
             EditorGUILayout.PropertyField(verticalSampleCountProperty);
             EditorGUILayout.PropertyField(verticalEdgeInsetProperty);
@@ -115,8 +123,7 @@ sealed class WaterBuoyancyEditor : Editor
         }
         else if (inspectorSamplingMode == InspectorSamplingMode.Raycast)
         {
-            scenePlacementEnabled = false;
-            pointEditingEnabled = false;
+            DisableSceneTools();
             EditorGUILayout.PropertyField(horizontalSampleCountProperty);
             EditorGUILayout.PropertyField(horizontalEdgeInsetProperty);
             EditorGUILayout.PropertyField(xEdgeOffsetProperty);
@@ -130,6 +137,7 @@ sealed class WaterBuoyancyEditor : Editor
         serializedObject.ApplyModifiedProperties();
     }
 
+    // Manual mode is the only place we expose scene tools because those points are user-authored.
     void DrawManualSamplesInspector()
     {
         EditorGUILayout.HelpBox(
@@ -188,14 +196,14 @@ sealed class WaterBuoyancyEditor : Editor
         }
     }
 
+    // Scene interaction is disabled outside manual mode so auto-generated layouts stay read-only.
     void OnSceneGUI()
     {
         serializedObject.Update();
 
-        if (autoGenerateSamplePointsProperty.boolValue)
+        if (GetInspectorSamplingMode() != InspectorSamplingMode.Manual)
         {
-            scenePlacementEnabled = false;
-            pointEditingEnabled = false;
+            DisableSceneTools();
             serializedObject.ApplyModifiedProperties();
             return;
         }
@@ -214,7 +222,6 @@ sealed class WaterBuoyancyEditor : Editor
 
     void DrawExistingPointHandles()
     {
-        WaterBuoyancy buoyancy = (WaterBuoyancy)target;
         float totalWeight = GetTotalWeight();
 
         for (int i = 0; i < manualSamplePointsProperty.arraySize; i++)
@@ -223,10 +230,10 @@ sealed class WaterBuoyancyEditor : Editor
             SerializedProperty positionProperty = pointProperty.FindPropertyRelative(LocalPositionFieldName);
             SerializedProperty weightProperty = pointProperty.FindPropertyRelative(WeightFieldName);
 
-            Vector3 worldPosition = buoyancy.transform.TransformPoint(positionProperty.vector3Value);
-            float handleSize = HandleUtility.GetHandleSize(worldPosition) * 0.08f;
+            Vector3 worldPosition = TargetBuoyancy.transform.TransformPoint(positionProperty.vector3Value);
+            float handleSize = HandleUtility.GetHandleSize(worldPosition) * MoveHandleSizeScale;
 
-            using (new Handles.DrawingScope(new Color(0.15f, 0.8f, 1f, 0.95f)))
+            using (new Handles.DrawingScope(ManualPointColor))
             {
                 EditorGUI.BeginChangeCheck();
                 Vector3 movedWorldPosition = Handles.FreeMoveHandle(
@@ -237,7 +244,7 @@ sealed class WaterBuoyancyEditor : Editor
 
                 if (EditorGUI.EndChangeCheck())
                 {
-                    positionProperty.vector3Value = buoyancy.transform.InverseTransformPoint(movedWorldPosition);
+                    positionProperty.vector3Value = TargetBuoyancy.transform.InverseTransformPoint(movedWorldPosition);
                 }
 
                 float normalizedWeight = GetNormalizedWeight(weightProperty.floatValue, totalWeight, manualSamplePointsProperty.arraySize);
@@ -274,8 +281,8 @@ sealed class WaterBuoyancyEditor : Editor
             return;
         }
 
-        float previewSize = HandleUtility.GetHandleSize(hit.point) * 0.09f;
-        using (new Handles.DrawingScope(new Color(0.25f, 0.95f, 1f, 0.95f)))
+        float previewSize = HandleUtility.GetHandleSize(hit.point) * PlacementPreviewSizeScale;
+        using (new Handles.DrawingScope(PlacementPreviewColor))
         {
             Handles.SphereHandleCap(0, hit.point, Quaternion.identity, previewSize, EventType.Repaint);
             Handles.DrawLine(hit.point, hit.point + (hit.normal * previewSize * 2f));
@@ -288,8 +295,7 @@ sealed class WaterBuoyancyEditor : Editor
 
         if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0 && !currentEvent.alt)
         {
-            WaterBuoyancy buoyancy = (WaterBuoyancy)target;
-            Vector3 localPosition = buoyancy.transform.InverseTransformPoint(hit.point);
+            Vector3 localPosition = TargetBuoyancy.transform.InverseTransformPoint(hit.point);
             AddManualPoint(localPosition, 1f);
             currentEvent.Use();
         }
@@ -300,7 +306,7 @@ sealed class WaterBuoyancyEditor : Editor
         serializedObject.Update();
 
         int newIndex = manualSamplePointsProperty.arraySize;
-        manualSamplePointsProperty.InsertArrayElementAtIndex(newIndex);
+        manualSamplePointsProperty.arraySize++;
 
         SerializedProperty pointProperty = manualSamplePointsProperty.GetArrayElementAtIndex(newIndex);
         pointProperty.FindPropertyRelative(LocalPositionFieldName).vector3Value = localPosition;
@@ -312,20 +318,19 @@ sealed class WaterBuoyancyEditor : Editor
 
     bool HasPlaceableMesh()
     {
-        WaterBuoyancy buoyancy = (WaterBuoyancy)target;
-        return buoyancy.GetComponentsInChildren<MeshFilter>().Length > 0
-            || buoyancy.GetComponentsInChildren<SkinnedMeshRenderer>().Length > 0;
+        return TargetBuoyancy.GetComponentsInChildren<MeshFilter>().Length > 0
+            || TargetBuoyancy.GetComponentsInChildren<SkinnedMeshRenderer>().Length > 0;
     }
 
+    // Finds the closest hit on any mesh under this buoyancy object so scene placement works on complex models.
     bool TryGetNearestMeshHit(Ray ray, out MeshHit closestHit)
     {
-        WaterBuoyancy buoyancy = (WaterBuoyancy)target;
         closestHit = default;
 
         bool foundHit = false;
         float closestDistance = float.PositiveInfinity;
 
-        MeshFilter[] meshFilters = buoyancy.GetComponentsInChildren<MeshFilter>();
+        MeshFilter[] meshFilters = TargetBuoyancy.GetComponentsInChildren<MeshFilter>();
         for (int i = 0; i < meshFilters.Length; i++)
         {
             MeshFilter meshFilter = meshFilters[i];
@@ -349,7 +354,7 @@ sealed class WaterBuoyancyEditor : Editor
             foundHit = true;
         }
 
-        SkinnedMeshRenderer[] skinnedMeshes = buoyancy.GetComponentsInChildren<SkinnedMeshRenderer>();
+        SkinnedMeshRenderer[] skinnedMeshes = TargetBuoyancy.GetComponentsInChildren<SkinnedMeshRenderer>();
         for (int i = 0; i < skinnedMeshes.Length; i++)
         {
             SkinnedMeshRenderer skinnedMesh = skinnedMeshes[i];
@@ -377,6 +382,7 @@ sealed class WaterBuoyancyEditor : Editor
         return foundHit;
     }
 
+    // Intersects the scene ray against every triangle in one mesh, without depending on newer editor-only APIs.
     bool TryIntersectMesh(Ray worldRay, Mesh mesh, Matrix4x4 localToWorld, out MeshHit closestHit)
     {
         closestHit = default;
@@ -425,7 +431,7 @@ sealed class WaterBuoyancyEditor : Editor
             }
 
             Vector3 localNormal = Vector3.Cross(b - a, c - a);
-            if (localNormal.sqrMagnitude <= 0.000001f)
+            if (localNormal.sqrMagnitude <= GeometryEpsilon)
             {
                 continue;
             }
@@ -458,7 +464,8 @@ sealed class WaterBuoyancyEditor : Editor
         Vector3 perpendicular = Vector3.Cross(ray.direction, edgeAC);
         float determinant = Vector3.Dot(edgeAB, perpendicular);
 
-        if (Mathf.Abs(determinant) < 0.000001f)
+        // Moller-Trumbore ray-triangle test in local mesh space.
+        if (Mathf.Abs(determinant) < GeometryEpsilon)
         {
             return false;
         }
@@ -508,12 +515,18 @@ sealed class WaterBuoyancyEditor : Editor
             return 0f;
         }
 
-        if (totalWeight <= 0.0001f)
+        if (totalWeight <= WeightEpsilon)
         {
             return 1f / pointCount;
         }
 
         return Mathf.Max(0f, weight) / totalWeight;
+    }
+
+    void DisableSceneTools()
+    {
+        scenePlacementEnabled = false;
+        pointEditingEnabled = false;
     }
 
     InspectorSamplingMode GetInspectorSamplingMode()

@@ -1,7 +1,4 @@
 using UnityEngine;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 [ExecuteAlways]
 public class World : MonoBehaviour
@@ -15,6 +12,9 @@ public class World : MonoBehaviour
 
     [Header("Ground")]
     public Vector2 groundSize = new Vector2(10f, 10f);
+
+    // Matches the previous terrain baseline so older scenes keep roughly the same elevation.
+    public float groundHeight = -1.35f;
 
     [SerializeField]
     Material groundMaterial;
@@ -77,7 +77,7 @@ public class World : MonoBehaviour
             groundSurface.SyncFromWorld(
                 Mathf.Max(2, resolution),
                 groundSize,
-                waterHeight);
+                groundHeight);
         }
 
         waterFilter = EnsureMeshChild(
