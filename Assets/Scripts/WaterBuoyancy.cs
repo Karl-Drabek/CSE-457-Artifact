@@ -7,6 +7,7 @@ using UnityEngine.Serialization;
 public class WaterBuoyancy : MonoBehaviour
 {
     const float MinDensity = 0.0001f;
+    const float DefaultEdgeInset = 0.08f;
 
     [Serializable]
     public struct SamplePoint
@@ -21,6 +22,12 @@ public class WaterBuoyancy : MonoBehaviour
             this.localPosition = localPosition;
             this.weight = Mathf.Max(0f, weight);
         }
+    }
+
+    public enum SampleMode
+    {
+        Lattice,
+        Raycast
     }
 
     [SerializeField]
@@ -52,14 +59,29 @@ public class WaterBuoyancy : MonoBehaviour
     [Min(0f)]
     public float waterAngularDrag = 1f;
 
-    [Range(2, 6)]
+    [SerializeField]
+    SampleMode sampleMode = SampleMode.Raycast;
+
+    [Range(2, 10)]
     public int horizontalSampleCount = 3;
 
     [Range(2, 6)]
     public int verticalSampleCount = 3;
 
     [Range(0f, 0.45f)]
-    public float sampleEdgeInset = 0.08f;
+    public float verticalEdgeInset = DefaultEdgeInset;
+
+    [Range(0f, 0.45f)]
+    public float horizontalEdgeInset = DefaultEdgeInset;
+
+    [Range(-1f, 1f)]
+    public float xEdgeOffset = 0f;
+
+    [Range(-1f, 1f)]
+    public float zEdgeOffset = 0f;
+
+    [SerializeField, HideInInspector, FormerlySerializedAs("sampleEdgeInset")]
+    float legacySampleEdgeInset = DefaultEdgeInset;
 
     Rigidbody body;
     Collider[] cachedColliders = new Collider[0];
@@ -71,6 +93,7 @@ public class WaterBuoyancy : MonoBehaviour
     {
         EnsureSetup();
         UpgradeLegacyManualSamplePoints();
+        UpgradeLegacyInsetSettings();
         SanitizeSampleSettings();
         RefreshAutoSamplePoints();
     }
@@ -81,6 +104,7 @@ public class WaterBuoyancy : MonoBehaviour
     {
         EnsureSetup();
         UpgradeLegacyManualSamplePoints();
+        UpgradeLegacyInsetSettings();
         SanitizeSampleSettings();
         RefreshAutoSamplePoints();
     }
@@ -91,6 +115,7 @@ public class WaterBuoyancy : MonoBehaviour
     {
         EnsureSetup();
         UpgradeLegacyManualSamplePoints();
+        UpgradeLegacyInsetSettings();
         SanitizeSampleSettings();
         RefreshAutoSamplePoints();
     }
@@ -101,6 +126,11 @@ public class WaterBuoyancy : MonoBehaviour
     {
         EnsureSetup();
         objectDensity = 1f;
+        sampleMode = SampleMode.Raycast;
+        verticalEdgeInset = DefaultEdgeInset;
+        horizontalEdgeInset = DefaultEdgeInset;
+        xEdgeOffset = 0f;
+        zEdgeOffset = 0f;
 
         RefreshAutoSamplePoints();
     }
@@ -218,6 +248,20 @@ public class WaterBuoyancy : MonoBehaviour
         legacySamplePoints = new Vector3[0];
     }
 
+    // Copies the old single inset setting into the split vertical/horizontal inset values.
+    void UpgradeLegacyInsetSettings()
+    {
+        if (!Mathf.Approximately(verticalEdgeInset, DefaultEdgeInset)
+            || !Mathf.Approximately(horizontalEdgeInset, DefaultEdgeInset)
+            || Mathf.Approximately(legacySampleEdgeInset, DefaultEdgeInset))
+        {
+            return;
+        }
+
+        verticalEdgeInset = legacySampleEdgeInset;
+        horizontalEdgeInset = legacySampleEdgeInset;
+    }
+
     // Makes sure manual sample weights and scalar settings stay inside valid ranges.
     // Called during editor validation and startup before sampling or force application.
     void SanitizeSampleSettings()
@@ -227,18 +271,26 @@ public class WaterBuoyancy : MonoBehaviour
         if (manualSamplePoints == null)
         {
             manualSamplePoints = new SamplePoint[0];
-            return;
+        }
+        else
+        {
+            for (int i = 0; i < manualSamplePoints.Length; i++)
+            {
+                SamplePoint samplePoint = manualSamplePoints[i];
+                samplePoint.weight = Mathf.Max(0f, samplePoint.weight);
+                manualSamplePoints[i] = samplePoint;
+            }
         }
 
-        for (int i = 0; i < manualSamplePoints.Length; i++)
-        {
-            SamplePoint samplePoint = manualSamplePoints[i];
-            samplePoint.weight = Mathf.Max(0f, samplePoint.weight);
-            manualSamplePoints[i] = samplePoint;
-        }
+        verticalEdgeInset = Mathf.Clamp(verticalEdgeInset, 0f, 0.45f);
+        horizontalEdgeInset = Mathf.Clamp(horizontalEdgeInset, 0f, 0.45f);
+        xEdgeOffset = Mathf.Clamp(xEdgeOffset, -1f, 1f);
+        zEdgeOffset = Mathf.Clamp(zEdgeOffset, -1f, 1f);
+        horizontalSampleCount = Mathf.Max(2, horizontalSampleCount);
+        verticalSampleCount = Mathf.Max(2, verticalSampleCount);
     }
 
-    // Returns either the user-authored weighted points or the current auto-generated lattice.
+    // Returns either the user-authored weighted points or the current auto-generated layout.
     // Called from the physics loop and gizmo drawing so both systems use the same points.
     SamplePoint[] GetActiveSamplePoints()
     {
@@ -295,7 +347,7 @@ public class WaterBuoyancy : MonoBehaviour
         return Mathf.Max(0f, pointWeight) / totalWeight;
     }
 
-    // Rebuilds the auto-generated sample lattice from the object's collider bounds.
+    // Rebuilds the auto-generated sample layout from the object's collider bounds.
     // Called after setup changes so buoyancy forces remain distributed across the current shape.
     void RefreshAutoSamplePoints()
     {
@@ -307,10 +359,132 @@ public class WaterBuoyancy : MonoBehaviour
             return;
         }
 
-        bool hasBounds = false;
-        Bounds localBounds = default;
+        Bounds worldBounds = GetCombinedWorldBounds();
+        if (worldBounds.size == Vector3.zero)
+        {
+            autoSamplePoints = CreateFallbackSamplePoints();
+            return;
+        }
 
-        // Convert collider bounds back into local space so sampling follows the object's actual transform.
+        int safeHorizontalCount = Mathf.Max(2, horizontalSampleCount);
+        int safeVerticalCount = Mathf.Max(2, verticalSampleCount);
+
+        autoSamplePoints = sampleMode == SampleMode.Raycast
+            ? GenerateRaycastSamplePoints(worldBounds, safeHorizontalCount, horizontalEdgeInset, xEdgeOffset, zEdgeOffset)
+            : GenerateLatticePoints(worldBounds, safeHorizontalCount, safeVerticalCount, verticalEdgeInset, horizontalEdgeInset);
+
+        if (autoSamplePoints == null || autoSamplePoints.Length == 0)
+        {
+            autoSamplePoints = CreateFallbackSamplePoints();
+        }
+    }
+
+    // Projects sampling columns upward through this object's colliders and keeps only hits on the object itself.
+    SamplePoint[] GenerateRaycastSamplePoints(Bounds worldBounds, int safeHorizontalCount, float inset, float xOffset, float zOffset)
+    {
+        float rayStartY = worldBounds.min.y - 0.5f;
+        float rayLength = worldBounds.size.y + 1f;
+        List<SamplePoint> generatedPoints = new List<SamplePoint>(safeHorizontalCount * safeHorizontalCount);
+
+        for (int zIndex = 0; zIndex < safeHorizontalCount; zIndex++)
+        {
+            float zT = Mathf.Lerp(inset + zOffset, 1f - inset + zOffset, zIndex / (safeHorizontalCount - 1f));
+            float z = Mathf.Lerp(worldBounds.min.z, worldBounds.max.z, zT);
+
+            for (int xIndex = 0; xIndex < safeHorizontalCount; xIndex++)
+            {
+                float xT = Mathf.Lerp(inset + xOffset, 1f - inset + xOffset, xIndex / (safeHorizontalCount - 1f));
+                float x = Mathf.Lerp(worldBounds.min.x, worldBounds.max.x, xT);
+
+                Vector3 rayOrigin = new Vector3(x, rayStartY, z);
+                if (!TryGetOwnRaycastHit(rayOrigin, rayLength, out RaycastHit hit))
+                {
+                    continue;
+                }
+
+                generatedPoints.Add(new SamplePoint(transform.InverseTransformPoint(hit.point), 1f));
+            }
+        }
+
+        return generatedPoints.ToArray();
+    }
+
+    // Fills the collider bounds volume with a 3D point lattice for boxier or fully volumetric sampling.
+    SamplePoint[] GenerateLatticePoints(Bounds worldBounds, int safeHorizontalCount, int safeVerticalCount, float verticalInset, float horizontalInset)
+    {
+        List<SamplePoint> generatedPoints = new List<SamplePoint>(safeHorizontalCount * safeHorizontalCount * safeVerticalCount);
+
+        for (int yIndex = 0; yIndex < safeVerticalCount; yIndex++)
+        {
+            float yT = Mathf.Lerp(verticalInset, 1f - verticalInset, yIndex / (safeVerticalCount - 1f));
+            float y = Mathf.Lerp(worldBounds.min.y, worldBounds.max.y, yT);
+
+            for (int zIndex = 0; zIndex < safeHorizontalCount; zIndex++)
+            {
+                float zT = Mathf.Lerp(horizontalInset, 1f - horizontalInset, zIndex / (safeHorizontalCount - 1f));
+                float z = Mathf.Lerp(worldBounds.min.z, worldBounds.max.z, zT);
+
+                for (int xIndex = 0; xIndex < safeHorizontalCount; xIndex++)
+                {
+                    float xT = Mathf.Lerp(horizontalInset, 1f - horizontalInset, xIndex / (safeHorizontalCount - 1f));
+                    float x = Mathf.Lerp(worldBounds.min.x, worldBounds.max.x, xT);
+                    generatedPoints.Add(new SamplePoint(transform.InverseTransformPoint(new Vector3(x, y, z)), 1f));
+                }
+            }
+        }
+
+        return generatedPoints.ToArray();
+    }
+
+    // Finds the nearest upward raycast hit that belongs to this object rather than another collider in the scene.
+    bool TryGetOwnRaycastHit(Vector3 rayOrigin, float rayLength, out RaycastHit closestHit)
+    {
+        RaycastHit[] hits = Physics.RaycastAll(rayOrigin, Vector3.up, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        closestHit = default;
+
+        bool foundHit = false;
+        float closestDistance = float.PositiveInfinity;
+        for (int hitIndex = 0; hitIndex < hits.Length; hitIndex++)
+        {
+            RaycastHit hit = hits[hitIndex];
+            if (!IsOwnedCollider(hit.collider) || hit.distance >= closestDistance)
+            {
+                continue;
+            }
+
+            closestDistance = hit.distance;
+            closestHit = hit;
+            foundHit = true;
+        }
+
+        return foundHit;
+    }
+
+    // Returns true when a collider belongs to the cached buoyancy body hierarchy.
+    bool IsOwnedCollider(Collider collider)
+    {
+        if (collider == null || cachedColliders == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < cachedColliders.Length; i++)
+        {
+            if (cachedColliders[i] == collider)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Combines all non-trigger collider bounds into one world-space box for automatic sample generation.
+    Bounds GetCombinedWorldBounds()
+    {
+        bool hasBounds = false;
+        Bounds combined = default;
+
         for (int i = 0; i < cachedColliders.Length; i++)
         {
             Collider collider = cachedColliders[i];
@@ -319,67 +493,18 @@ public class WaterBuoyancy : MonoBehaviour
                 continue;
             }
 
-            Bounds worldBounds = collider.bounds;
-            Vector3[] worldCorners =
+            if (!hasBounds)
             {
-                new Vector3(worldBounds.min.x, worldBounds.min.y, worldBounds.min.z),
-                new Vector3(worldBounds.min.x, worldBounds.min.y, worldBounds.max.z),
-                new Vector3(worldBounds.max.x, worldBounds.min.y, worldBounds.min.z),
-                new Vector3(worldBounds.max.x, worldBounds.min.y, worldBounds.max.z),
-                new Vector3(worldBounds.min.x, worldBounds.max.y, worldBounds.min.z),
-                new Vector3(worldBounds.min.x, worldBounds.max.y, worldBounds.max.z),
-                new Vector3(worldBounds.max.x, worldBounds.max.y, worldBounds.min.z),
-                new Vector3(worldBounds.max.x, worldBounds.max.y, worldBounds.max.z),
-            };
-
-            for (int cornerIndex = 0; cornerIndex < worldCorners.Length; cornerIndex++)
+                combined = collider.bounds;
+                hasBounds = true;
+            }
+            else
             {
-                Vector3 localCorner = transform.InverseTransformPoint(worldCorners[cornerIndex]);
-                if (!hasBounds)
-                {
-                    localBounds = new Bounds(localCorner, Vector3.zero);
-                    hasBounds = true;
-                }
-                else
-                {
-                    localBounds.Encapsulate(localCorner);
-                }
+                combined.Encapsulate(collider.bounds);
             }
         }
 
-        if (!hasBounds)
-        {
-            autoSamplePoints = CreateFallbackSamplePoints();
-            return;
-        }
-
-        int safeHorizontalCount = Mathf.Max(2, horizontalSampleCount);
-        int safeVerticalCount = Mathf.Max(2, verticalSampleCount);
-        float inset = Mathf.Clamp(sampleEdgeInset, 0f, 0.45f);
-
-        List<SamplePoint> generatedPoints = new List<SamplePoint>(safeHorizontalCount * safeHorizontalCount * safeVerticalCount);
-
-        // Fill the collider volume with a 3D lattice so tall objects are sampled above and below the waterline.
-        for (int yIndex = 0; yIndex < safeVerticalCount; yIndex++)
-        {
-            float yT = Mathf.Lerp(inset, 1f - inset, yIndex / (safeVerticalCount - 1f));
-            float y = Mathf.Lerp(localBounds.min.y, localBounds.max.y, yT);
-
-            for (int zIndex = 0; zIndex < safeHorizontalCount; zIndex++)
-            {
-                float zT = Mathf.Lerp(inset, 1f - inset, zIndex / (safeHorizontalCount - 1f));
-                float z = Mathf.Lerp(localBounds.min.z, localBounds.max.z, zT);
-
-                for (int xIndex = 0; xIndex < safeHorizontalCount; xIndex++)
-                {
-                    float xT = Mathf.Lerp(inset, 1f - inset, xIndex / (safeHorizontalCount - 1f));
-                    float x = Mathf.Lerp(localBounds.min.x, localBounds.max.x, xT);
-                    generatedPoints.Add(new SamplePoint(new Vector3(x, y, z), 1f));
-                }
-            }
-        }
-
-        autoSamplePoints = generatedPoints.ToArray();
+        return combined;
     }
 
     // Returns a simple box-shaped sample set when there are no non-trigger colliders to inspect.

@@ -4,6 +4,13 @@ using UnityEngine;
 [CustomEditor(typeof(WaterBuoyancy))]
 sealed class WaterBuoyancyEditor : Editor
 {
+    enum InspectorSamplingMode
+    {
+        Lattice,
+        Raycast,
+        Manual
+    }
+
     struct MeshHit
     {
         public Vector3 point;
@@ -21,9 +28,13 @@ sealed class WaterBuoyancyEditor : Editor
     SerializedProperty surfaceNormalInfluenceProperty;
     SerializedProperty waterDragProperty;
     SerializedProperty waterAngularDragProperty;
+    SerializedProperty sampleModeProperty;
     SerializedProperty horizontalSampleCountProperty;
     SerializedProperty verticalSampleCountProperty;
-    SerializedProperty sampleEdgeInsetProperty;
+    SerializedProperty verticalEdgeInsetProperty;
+    SerializedProperty horizontalEdgeInsetProperty;
+    SerializedProperty xEdgeOffsetProperty;
+    SerializedProperty zEdgeOffsetProperty;
 
     bool scenePlacementEnabled;
     bool pointEditingEnabled;
@@ -38,9 +49,13 @@ sealed class WaterBuoyancyEditor : Editor
         surfaceNormalInfluenceProperty = serializedObject.FindProperty("surfaceNormalInfluence");
         waterDragProperty = serializedObject.FindProperty("waterDrag");
         waterAngularDragProperty = serializedObject.FindProperty("waterAngularDrag");
+        sampleModeProperty = serializedObject.FindProperty("sampleMode");
         horizontalSampleCountProperty = serializedObject.FindProperty("horizontalSampleCount");
         verticalSampleCountProperty = serializedObject.FindProperty("verticalSampleCount");
-        sampleEdgeInsetProperty = serializedObject.FindProperty("sampleEdgeInset");
+        verticalEdgeInsetProperty = serializedObject.FindProperty("verticalEdgeInset");
+        horizontalEdgeInsetProperty = serializedObject.FindProperty("horizontalEdgeInset");
+        xEdgeOffsetProperty = serializedObject.FindProperty("xEdgeOffset");
+        zEdgeOffsetProperty = serializedObject.FindProperty("zEdgeOffset");
 
         if (bakedSkinnedMesh == null)
         {
@@ -81,16 +96,31 @@ sealed class WaterBuoyancyEditor : Editor
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Sampling", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(autoGenerateSamplePointsProperty, new GUIContent("Auto Generate Sample Points"));
+        InspectorSamplingMode inspectorSamplingMode = GetInspectorSamplingMode();
+        EditorGUI.BeginChangeCheck();
+        inspectorSamplingMode = (InspectorSamplingMode)EditorGUILayout.EnumPopup("Mode", inspectorSamplingMode);
+        if (EditorGUI.EndChangeCheck())
+        {
+            ApplyInspectorSamplingMode(inspectorSamplingMode);
+        }
 
-        if (autoGenerateSamplePointsProperty.boolValue)
+        if (inspectorSamplingMode == InspectorSamplingMode.Lattice)
         {
             scenePlacementEnabled = false;
             pointEditingEnabled = false;
             EditorGUILayout.PropertyField(horizontalSampleCountProperty);
             EditorGUILayout.PropertyField(verticalSampleCountProperty);
-            EditorGUILayout.PropertyField(sampleEdgeInsetProperty);
-            EditorGUILayout.HelpBox("Switch off auto generation to author manual weighted sample points.", MessageType.Info);
+            EditorGUILayout.PropertyField(verticalEdgeInsetProperty);
+            EditorGUILayout.PropertyField(horizontalEdgeInsetProperty);
+        }
+        else if (inspectorSamplingMode == InspectorSamplingMode.Raycast)
+        {
+            scenePlacementEnabled = false;
+            pointEditingEnabled = false;
+            EditorGUILayout.PropertyField(horizontalSampleCountProperty);
+            EditorGUILayout.PropertyField(horizontalEdgeInsetProperty);
+            EditorGUILayout.PropertyField(xEdgeOffsetProperty);
+            EditorGUILayout.PropertyField(zEdgeOffsetProperty);
         }
         else
         {
@@ -484,5 +514,35 @@ sealed class WaterBuoyancyEditor : Editor
         }
 
         return Mathf.Max(0f, weight) / totalWeight;
+    }
+
+    InspectorSamplingMode GetInspectorSamplingMode()
+    {
+        if (!autoGenerateSamplePointsProperty.boolValue)
+        {
+            return InspectorSamplingMode.Manual;
+        }
+
+        return sampleModeProperty.enumValueIndex == (int)WaterBuoyancy.SampleMode.Lattice
+            ? InspectorSamplingMode.Lattice
+            : InspectorSamplingMode.Raycast;
+    }
+
+    void ApplyInspectorSamplingMode(InspectorSamplingMode mode)
+    {
+        switch (mode)
+        {
+            case InspectorSamplingMode.Manual:
+                autoGenerateSamplePointsProperty.boolValue = false;
+                break;
+            case InspectorSamplingMode.Lattice:
+                autoGenerateSamplePointsProperty.boolValue = true;
+                sampleModeProperty.enumValueIndex = (int)WaterBuoyancy.SampleMode.Lattice;
+                break;
+            default:
+                autoGenerateSamplePointsProperty.boolValue = true;
+                sampleModeProperty.enumValueIndex = (int)WaterBuoyancy.SampleMode.Raycast;
+                break;
+        }
     }
 }
