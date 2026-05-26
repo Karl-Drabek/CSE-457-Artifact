@@ -7,7 +7,6 @@ sealed class WaterBuoyancyEditor : Editor
     const float WeightEpsilon = 0.0001f;
     const float MoveHandleSizeScale = 0.08f;
     const float PlacementPreviewSizeScale = 0.09f;
-    const float GeometryEpsilon = 0.000001f;
 
     static readonly Color ManualPointColor = new Color(0.15f, 0.8f, 1f, 0.95f);
     static readonly Color PlacementPreviewColor = new Color(0.25f, 0.95f, 1f, 0.95f);
@@ -17,13 +16,6 @@ sealed class WaterBuoyancyEditor : Editor
         Lattice,
         Raycast,
         Manual
-    }
-
-    struct MeshHit
-    {
-        public Vector3 point;
-        public Vector3 normal;
-        public float distance;
     }
 
     const string LocalPositionFieldName = "localPosition";
@@ -162,7 +154,7 @@ sealed class WaterBuoyancyEditor : Editor
                 }
             }
 
-            if (!HasPlaceableMesh())
+            if (!MeshPointPlacementUtility.HasPlaceableMesh(TargetBuoyancy))
             {
                 EditorGUILayout.HelpBox("No MeshFilter or SkinnedMeshRenderer found for scene-click placement.", MessageType.Warning);
             }
@@ -178,6 +170,9 @@ sealed class WaterBuoyancyEditor : Editor
     // Manual mode is the only place we expose scene tools because those points are user-authored.
     void DrawManualSamplesInspector()
     {
+        Component placementTarget = TargetBuoyancy;
+        int unreadableStaticMeshCount = MeshPointPlacementUtility.CountUnreadableStaticMeshes(placementTarget);
+
         EditorGUILayout.HelpBox(
             "Use scene placement to add points and point editing to drag existing points in the Scene view. The array values remain directly editable in the Inspector.",
             MessageType.Info);
@@ -225,9 +220,19 @@ sealed class WaterBuoyancyEditor : Editor
             }
         }
 
-        if (!HasPlaceableMesh())
+        if (unreadableStaticMeshCount > 0)
         {
-            EditorGUILayout.HelpBox("No MeshFilter or SkinnedMeshRenderer was found on this object or its children for scene-click placement.", MessageType.Warning);
+            EditorGUILayout.HelpBox(
+                "Some MeshFilter meshes on this hierarchy have Read/Write disabled, so scene-click placement will skip them. Enable Read/Write in the mesh import settings if you want to place points on those meshes.",
+                MessageType.Warning);
+        }
+
+        if (!MeshPointPlacementUtility.HasPlaceableMesh(placementTarget))
+        {
+            string missingMeshMessage = unreadableStaticMeshCount > 0
+                ? "No readable MeshFilter or SkinnedMeshRenderer was found on this object or its children for scene-click placement."
+                : "No MeshFilter or SkinnedMeshRenderer was found on this object or its children for scene-click placement.";
+            EditorGUILayout.HelpBox(missingMeshMessage, MessageType.Warning);
         }
     }
 
@@ -338,7 +343,7 @@ void DrawManualPointGizmos()
 
     void HandleScenePlacement()
     {
-        if (!HasPlaceableMesh())
+        if (!MeshPointPlacementUtility.HasPlaceableMesh(TargetBuoyancy))
         {
             return;
         }
@@ -378,7 +383,7 @@ void DrawManualPointGizmos()
         if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0)
         {
             Ray ray = HandleUtility.GUIPointToWorldRay(currentEvent.mousePosition);
-            if (TryGetNearestMeshHit(ray, out MeshHit hit))
+            if (MeshPointPlacementUtility.TryGetNearestMeshHit(TargetBuoyancy, bakedSkinnedMesh, ray, out MeshPointPlacementUtility.MeshHit hit))
             {
                 Vector3 localPosition = TargetBuoyancy.transform.InverseTransformPoint(hit.point);
                 // Weight based on Y position within bounds at placement time
@@ -436,185 +441,6 @@ void DrawManualPointGizmos()
 
         serializedObject.ApplyModifiedProperties();
         SceneView.RepaintAll();
-    }
-
-    bool HasPlaceableMesh()
-    {
-        return TargetBuoyancy.GetComponentsInChildren<MeshFilter>().Length > 0
-            || TargetBuoyancy.GetComponentsInChildren<SkinnedMeshRenderer>().Length > 0;
-    }
-
-    // Finds the closest hit on any mesh under this buoyancy object so scene placement works on complex models.
-    bool TryGetNearestMeshHit(Ray ray, out MeshHit closestHit)
-    {
-        closestHit = default;
-
-        bool foundHit = false;
-        float closestDistance = float.PositiveInfinity;
-
-        MeshFilter[] meshFilters = TargetBuoyancy.GetComponentsInChildren<MeshFilter>();
-        for (int i = 0; i < meshFilters.Length; i++)
-        {
-            MeshFilter meshFilter = meshFilters[i];
-            if (meshFilter == null || meshFilter.sharedMesh == null)
-            {
-                continue;
-            }
-
-            if (!TryIntersectMesh(ray, meshFilter.sharedMesh, meshFilter.transform.localToWorldMatrix, out MeshHit hit))
-            {
-                continue;
-            }
-
-            if (hit.distance >= closestDistance)
-            {
-                continue;
-            }
-
-            closestDistance = hit.distance;
-            closestHit = hit;
-            foundHit = true;
-        }
-
-        SkinnedMeshRenderer[] skinnedMeshes = TargetBuoyancy.GetComponentsInChildren<SkinnedMeshRenderer>();
-        for (int i = 0; i < skinnedMeshes.Length; i++)
-        {
-            SkinnedMeshRenderer skinnedMesh = skinnedMeshes[i];
-            if (skinnedMesh == null || skinnedMesh.sharedMesh == null)
-            {
-                continue;
-            }
-
-            skinnedMesh.BakeMesh(bakedSkinnedMesh);
-            if (!TryIntersectMesh(ray, bakedSkinnedMesh, skinnedMesh.transform.localToWorldMatrix, out MeshHit hit))
-            {
-                continue;
-            }
-
-            if (hit.distance >= closestDistance)
-            {
-                continue;
-            }
-
-            closestDistance = hit.distance;
-            closestHit = hit;
-            foundHit = true;
-        }
-
-        return foundHit;
-    }
-
-    // Intersects the scene ray against every triangle in one mesh, without depending on newer editor-only APIs.
-    bool TryIntersectMesh(Ray worldRay, Mesh mesh, Matrix4x4 localToWorld, out MeshHit closestHit)
-    {
-        closestHit = default;
-        if (mesh == null)
-        {
-            return false;
-        }
-
-        Vector3[] vertices = mesh.vertices;
-        int[] triangles = mesh.triangles;
-        if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length < 3)
-        {
-            return false;
-        }
-
-        Matrix4x4 worldToLocal = localToWorld.inverse;
-        Vector3 localRayOrigin = worldToLocal.MultiplyPoint3x4(worldRay.origin);
-        Vector3 localRayDirection = worldToLocal.MultiplyVector(worldRay.direction).normalized;
-        Ray localRay = new Ray(localRayOrigin, localRayDirection);
-
-        if (!mesh.bounds.IntersectRay(localRay))
-        {
-            return false;
-        }
-
-        bool foundHit = false;
-        float closestWorldDistance = float.PositiveInfinity;
-
-        for (int triangleIndex = 0; triangleIndex < triangles.Length; triangleIndex += 3)
-        {
-            Vector3 a = vertices[triangles[triangleIndex]];
-            Vector3 b = vertices[triangles[triangleIndex + 1]];
-            Vector3 c = vertices[triangles[triangleIndex + 2]];
-
-            if (!TryIntersectTriangle(localRay, a, b, c, out float localDistance))
-            {
-                continue;
-            }
-
-            Vector3 localPoint = localRay.origin + (localRay.direction * localDistance);
-            Vector3 worldPoint = localToWorld.MultiplyPoint3x4(localPoint);
-            float worldDistance = Vector3.Distance(worldRay.origin, worldPoint);
-            if (worldDistance >= closestWorldDistance)
-            {
-                continue;
-            }
-
-            Vector3 localNormal = Vector3.Cross(b - a, c - a);
-            if (localNormal.sqrMagnitude <= GeometryEpsilon)
-            {
-                continue;
-            }
-
-            Vector3 worldNormal = worldToLocal.transpose.MultiplyVector(localNormal).normalized;
-            if (Vector3.Dot(worldNormal, worldRay.direction) > 0f)
-            {
-                worldNormal = -worldNormal;
-            }
-
-            closestWorldDistance = worldDistance;
-            closestHit = new MeshHit
-            {
-                point = worldPoint,
-                normal = worldNormal,
-                distance = worldDistance
-            };
-            foundHit = true;
-        }
-
-        return foundHit;
-    }
-
-    bool TryIntersectTriangle(Ray ray, Vector3 a, Vector3 b, Vector3 c, out float distance)
-    {
-        distance = 0f;
-
-        Vector3 edgeAB = b - a;
-        Vector3 edgeAC = c - a;
-        Vector3 perpendicular = Vector3.Cross(ray.direction, edgeAC);
-        float determinant = Vector3.Dot(edgeAB, perpendicular);
-
-        // Moller-Trumbore ray-triangle test in local mesh space.
-        if (Mathf.Abs(determinant) < GeometryEpsilon)
-        {
-            return false;
-        }
-
-        float inverseDeterminant = 1f / determinant;
-        Vector3 triangleToRay = ray.origin - a;
-        float u = Vector3.Dot(triangleToRay, perpendicular) * inverseDeterminant;
-        if (u < 0f || u > 1f)
-        {
-            return false;
-        }
-
-        Vector3 q = Vector3.Cross(triangleToRay, edgeAB);
-        float v = Vector3.Dot(ray.direction, q) * inverseDeterminant;
-        if (v < 0f || (u + v) > 1f)
-        {
-            return false;
-        }
-
-        float hitDistance = Vector3.Dot(edgeAC, q) * inverseDeterminant;
-        if (hitDistance < 0f)
-        {
-            return false;
-        }
-
-        distance = hitDistance;
-        return true;
     }
 
     float GetTotalWeight()

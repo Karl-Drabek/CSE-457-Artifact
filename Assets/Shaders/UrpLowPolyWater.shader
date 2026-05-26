@@ -54,6 +54,7 @@ Shader "Artifacts/URP Low Poly Water"
                 float4 positionOS : POSITION;
                 float3 normalOS : NORMAL;
                 float2 uv : TEXCOORD0;
+                half4 color : COLOR;
             };
 
             struct Varyings
@@ -63,6 +64,7 @@ Shader "Artifacts/URP Low Poly Water"
                 half3 normalWS : TEXCOORD1;
                 float2 foamUV : TEXCOORD2;
                 half fogFactor : TEXCOORD3;
+                half whitecapMask : TEXCOORD4;
             };
 
             TEXTURE2D(_FoamTex);
@@ -109,6 +111,7 @@ Shader "Artifacts/URP Low Poly Water"
                 output.normalWS = normalInputs.normalWS;
                 output.foamUV = positionInputs.positionWS.xz * _FoamTiling + _Time.y * _FoamScroll.xy;
                 output.fogFactor = ComputeFogFactor(positionInputs.positionCS.z);
+                output.whitecapMask = saturate(input.color.a);
 
                 return output;
             }
@@ -130,7 +133,8 @@ Shader "Artifacts/URP Low Poly Water"
                 half foamMask = SAMPLE_TEXTURE2D(_FoamTex, sampler_FoamTex, input.foamUV).r;
                 half surfaceFoam = saturate((foamMask - 0.45h) * 2.0h) * fresnel * _FoamStrength;
                 half intersectionFoam = EvaluateIntersectionFoam(input.positionCS, foamMask);
-                half foam = saturate(surfaceFoam + intersectionFoam);
+                half whitecapFoam = input.whitecapMask * lerp(0.7h, 1.0h, foamMask);
+                half foam = saturate(surfaceFoam + intersectionFoam + whitecapFoam);
 
                 half3 color = litColor;
                 color += mainLight.color * specular;

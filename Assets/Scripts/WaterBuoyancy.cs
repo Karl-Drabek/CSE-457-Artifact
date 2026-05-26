@@ -10,6 +10,9 @@ public class WaterBuoyancy : MonoBehaviour
     const float MinSubmergenceRange = 0.001f;
     const float MinWeightSum = 0.0001f;
     const float DefaultEdgeInset = 0.08f;
+    const float MinWaterFlowSpeed = 0.0001f;
+    const float MinRelativeWaterSpeed = 0.0001f;
+    const float MinAngularSpeed = 0.0001f;
 
     [Serializable]
     public struct SamplePoint
@@ -82,6 +85,7 @@ public class WaterBuoyancy : MonoBehaviour
     [Min(0f)]
     public float waterDrag = 2f;
 
+    [FormerlySerializedAs("generalAngularDrag")]
     [Min(0f)]
     public float waterAngularDrag = 1f;
 
@@ -137,6 +141,7 @@ public class WaterBuoyancy : MonoBehaviour
     void Reset()
     {
         objectDensity = 1f;
+        waterAngularDrag = 1f;
         sampleMode = SampleMode.Raycast;
         verticalEdgeInset = DefaultEdgeInset;
         horizontalEdgeInset = DefaultEdgeInset;
@@ -202,6 +207,11 @@ public class WaterBuoyancy : MonoBehaviour
             Vector3 buoyancyDirection = Vector3.Slerp(Vector3.up, waterNormal, surfaceNormalInfluence).normalized;
             Vector3 buoyancyForce = buoyancyDirection * (gravityMagnitude * fullSubmersionBuoyancyStrength * normalizedWeight * submergence);
             body.AddForceAtPosition(buoyancyForce, worldPoint, ForceMode.Force);
+
+            if (waterDrag > 0f)
+            {
+                ApplyPointWaterFlowForce(water, worldPoint, normalizedWeight, submergence, timeSeconds);
+            }
         }
 
         if (hasSubmergedPoint)
@@ -211,16 +221,11 @@ public class WaterBuoyancy : MonoBehaviour
 
             if (waterDrag > 0f)
             {
-                // Apply drag once at the rigidbody level so it does not multiply by sample count
-                // or spike from large corner velocities while the body is rotating in the water.
+                // Keep baseline damping at the rigidbody level so first water contact does not create sharp torque spikes.
                 body.AddForce(-body.linearVelocity * (waterDrag * weightedSubmergence), ForceMode.Acceleration);
             }
 
-            if (waterAngularDrag > 0f)
-            {
-                body.AddTorque(-body.angularVelocity * (waterAngularDrag * weightedSubmergence), ForceMode.Acceleration);
-            }
-
+            ApplyWaterAngularDrag(weightedSubmergence);
             if (pitchDamping > 0f)
             {
                 float pitchVelocity = body.angularVelocity.x;
@@ -296,6 +301,7 @@ public class WaterBuoyancy : MonoBehaviour
     void SanitizeSampleSettings()
     {
         objectDensity = Mathf.Max(MinDensity, objectDensity);
+        waterAngularDrag = Mathf.Max(0f, waterAngularDrag);
 
         if (manualSamplePoints == null)
         {
@@ -372,6 +378,39 @@ public class WaterBuoyancy : MonoBehaviour
         }
 
         return Mathf.Max(0f, pointWeight) / totalWeight;
+    }
+
+    // Applies localized current forces without turning calm-water splash contact into a torque spike.
+    void ApplyPointWaterFlowForce(UrpLowPolyWater water, Vector3 worldPoint, float normalizedWeight, float submergence, float timeSeconds)
+    {
+        Vector3 waterVelocity = water.GetFlowVelocityAtWorldPosition(worldPoint, timeSeconds);
+        if (waterVelocity.sqrMagnitude <= MinWaterFlowSpeed * MinWaterFlowSpeed)
+        {
+            return;
+        }
+
+        // Use point velocity here so the whirlpool can push different parts of the hull differently
+        // and generate the expected turning force without relying on center-of-mass motion alone.
+        Vector3 pointVelocity = body.GetPointVelocity(worldPoint);
+        Vector3 relativePlanarVelocity = Vector3.ProjectOnPlane(pointVelocity - waterVelocity, Vector3.up);
+        if (relativePlanarVelocity.sqrMagnitude <= MinRelativeWaterSpeed * MinRelativeWaterSpeed)
+        {
+            return;
+        }
+
+        Vector3 waterFlowForce = -relativePlanarVelocity * (waterDrag * normalizedWeight * submergence);
+        body.AddForceAtPosition(waterFlowForce, worldPoint, ForceMode.Acceleration);
+    }
+
+    // Applies one shared angular damping term once the hull has some submergence.
+    void ApplyWaterAngularDrag(float weightedSubmergence)
+    {
+        if (waterAngularDrag <= 0f || body.angularVelocity.sqrMagnitude <= MinAngularSpeed * MinAngularSpeed)
+        {
+            return;
+        }
+
+        body.AddTorque(-body.angularVelocity * (waterAngularDrag * weightedSubmergence), ForceMode.Acceleration);
     }
 
     // Rebuilds the currently selected auto-generated sample layout from this object's colliders.
@@ -614,6 +653,7 @@ public class WaterBuoyancy : MonoBehaviour
 
         return hasBounds;
     }
+
 
     // Draws the effective point layout so sample placement is visible while tuning buoyancy.
     void OnDrawGizmosSelected()
