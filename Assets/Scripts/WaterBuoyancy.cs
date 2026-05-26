@@ -29,7 +29,8 @@ public class WaterBuoyancy : MonoBehaviour
     public enum SampleMode
     {
         Lattice,
-        Raycast
+        Raycast,
+        Manual
     }
 
     static readonly SamplePoint[] FallbackSamplePoints =
@@ -87,7 +88,7 @@ public class WaterBuoyancy : MonoBehaviour
     [SerializeField]
     SampleMode sampleMode = SampleMode.Raycast;
 
-    [Range(2, 10)]
+    [Range(2, 20)]
     public int horizontalSampleCount = 3;
 
     [Range(2, 6)]
@@ -104,6 +105,12 @@ public class WaterBuoyancy : MonoBehaviour
 
     [Range(-1f, 1f)]
     public float zEdgeOffset = 0f;
+
+    [Range(-5f, 5f)]
+    public float hull_height = 1.065f;
+
+    [Min(0f)]
+    public float pitchDamping = 2f;
 
     [SerializeField, HideInInspector, FormerlySerializedAs("sampleEdgeInset")]
     float legacySampleEdgeInset = DefaultEdgeInset;
@@ -212,6 +219,12 @@ public class WaterBuoyancy : MonoBehaviour
             if (waterAngularDrag > 0f)
             {
                 body.AddTorque(-body.angularVelocity * (waterAngularDrag * weightedSubmergence), ForceMode.Acceleration);
+            }
+
+            if (pitchDamping > 0f)
+            {
+                float pitchVelocity = body.angularVelocity.x;
+                body.AddTorque(-Vector3.right * (pitchVelocity * pitchDamping * weightedSubmergence), ForceMode.Acceleration);
             }
         }
     }
@@ -394,27 +407,65 @@ public class WaterBuoyancy : MonoBehaviour
     // Builds a surface-following sample grid by raycasting upward through this object's colliders.
     SamplePoint[] GenerateRaycastSamplePoints(Bounds worldBounds, int safeHorizontalCount, float inset, float xOffset, float zOffset)
     {
-        float rayStartY = worldBounds.min.y - 0.5f;
-        float rayLength = worldBounds.size.y + 1f;
+        // Use local bounds directly so rotation doesn't skew the grid
+        if (!TryGetCombinedLocalBounds(out Bounds localBounds))
+        {
+            return Array.Empty<SamplePoint>();
+        }
+
+        Vector3 localMin = localBounds.min;
+        Vector3 localMax = localBounds.max;
+
+        float rayStartLocalY = localMin.y - 0.5f;
+        float rayLength = localBounds.size.y + 1f;
+
         List<SamplePoint> generatedPoints = new List<SamplePoint>(safeHorizontalCount * safeHorizontalCount);
 
         for (int zIndex = 0; zIndex < safeHorizontalCount; zIndex++)
         {
             float zT = Mathf.Lerp(inset + zOffset, 1f - inset + zOffset, zIndex / (safeHorizontalCount - 1f));
-            float z = Mathf.Lerp(worldBounds.min.z, worldBounds.max.z, zT);
+            float localZ = Mathf.Lerp(localMin.z, localMax.z, zT);
 
             for (int xIndex = 0; xIndex < safeHorizontalCount; xIndex++)
             {
                 float xT = Mathf.Lerp(inset + xOffset, 1f - inset + xOffset, xIndex / (safeHorizontalCount - 1f));
-                float x = Mathf.Lerp(worldBounds.min.x, worldBounds.max.x, xT);
+                float localX = Mathf.Lerp(localMin.x, localMax.x, xT);
 
-                Vector3 rayOrigin = new Vector3(x, rayStartY, z);
-                if (!TryGetOwnRaycastHit(rayOrigin, rayLength, out RaycastHit hit))
+                Vector3 localRayOrigin = new Vector3(localX, rayStartLocalY, localZ);
+                Vector3 worldRayOrigin = transform.TransformPoint(localRayOrigin);
+                Vector3 worldRayDirection = transform.up;
+
+                RaycastHit[] hits = Physics.RaycastAll(worldRayOrigin, worldRayDirection, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+                if (hits.Length == 0)
                 {
                     continue;
                 }
 
-                generatedPoints.Add(new SamplePoint(transform.InverseTransformPoint(hit.point), 1f));
+                RaycastHit closestHit = default;
+                bool foundHit = false;
+                float closestDistance = float.PositiveInfinity;
+
+                for (int hitIndex = 0; hitIndex < hits.Length; hitIndex++)
+                {
+                    RaycastHit hit = hits[hitIndex];
+                    if (!IsOwnedCollider(hit.collider) || hit.distance >= closestDistance)
+                    {
+                        continue;
+                    }
+
+                    closestDistance = hit.distance;
+                    closestHit = hit;
+                    foundHit = true;
+                }
+
+                if (!foundHit)
+                {
+                    continue;
+                }
+
+                float weight = calculateWeight(localMin, localMax, transform.InverseTransformPoint(closestHit.point).y);
+                weight = Mathf.Max(0.2f, weight);
+                generatedPoints.Add(new SamplePoint(transform.InverseTransformPoint(closestHit.point), weight));
             }
         }
 
@@ -484,7 +535,7 @@ public class WaterBuoyancy : MonoBehaviour
     }
 
     // Combines all non-trigger collider bounds into one world-space box for auto-sample generation.
-    bool TryGetCombinedWorldBounds(out Bounds combined)
+    public bool TryGetCombinedWorldBounds(out Bounds combined)
     {
         bool hasBounds = false;
         combined = default;
@@ -511,6 +562,59 @@ public class WaterBuoyancy : MonoBehaviour
         return hasBounds;
     }
 
+    bool TryGetCombinedLocalBounds(out Bounds combined)
+    {
+        bool hasBounds = false;
+        combined = default;
+
+        for (int i = 0; i < cachedColliders.Length; i++)
+        {
+            Collider collider = cachedColliders[i];
+            if (collider == null || collider.isTrigger)
+            {
+                continue;
+            }
+
+            // Get bounds in local space directly depending on collider type
+            Bounds localBounds;
+            if (collider is BoxCollider box)
+            {
+                localBounds = new Bounds(box.center, box.size);
+            }
+            else if (collider is SphereCollider sphere)
+            {
+                float diameter = sphere.radius * 2f;
+                localBounds = new Bounds(sphere.center, new Vector3(diameter, diameter, diameter));
+            }
+            else if (collider is CapsuleCollider capsule)
+            {
+                float diameter = capsule.radius * 2f;
+                Vector3 size = new Vector3(diameter, capsule.height, diameter);
+                localBounds = new Bounds(capsule.center, size);
+            }
+            else if (collider is MeshCollider mesh && mesh.sharedMesh != null)
+            {
+                localBounds = mesh.sharedMesh.bounds;
+            }
+            else
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                combined = localBounds;
+                hasBounds = true;
+            }
+            else
+            {
+                combined.Encapsulate(localBounds);
+            }
+        }
+
+        return hasBounds;
+    }
+
     // Draws the effective point layout so sample placement is visible while tuning buoyancy.
     void OnDrawGizmosSelected()
     {
@@ -523,21 +627,55 @@ public class WaterBuoyancy : MonoBehaviour
             ? GetActiveSamplePoints()
             : (autoGenerateSamplePoints ? autoSamplePoints : manualSamplePoints);
 
-        if (activeSamplePoints == null || activeSamplePoints.Length == 0)
+        DrawGizmoPoints(activeSamplePoints, new Color(0.15f, 0.8f, 1f, 0.9f));
+    }
+
+    void DrawGizmoPoints(SamplePoint[] points, Color color)
+    {
+        if (points == null || points.Length == 0)
         {
             return;
         }
 
-        float totalWeight = GetTotalWeight(activeSamplePoints);
+        float totalWeight = GetTotalWeight(points);
+        Gizmos.color = color;
 
-        // Draw the effective sample set so buoyancy stability issues are easy to inspect in the editor.
-        Gizmos.color = new Color(0.15f, 0.8f, 1f, 0.9f);
-        for (int i = 0; i < activeSamplePoints.Length; i++)
+        for (int i = 0; i < points.Length; i++)
         {
-            float normalizedWeight = GetNormalizedWeight(activeSamplePoints[i].weight, totalWeight, activeSamplePoints.Length);
-            float visualWeight = Mathf.Clamp(normalizedWeight * Mathf.Max(activeSamplePoints.Length, 1), 0.5f, 2.5f);
+            float normalizedWeight = GetNormalizedWeight(points[i].weight, totalWeight, points.Length);
+            float visualWeight = Mathf.Clamp(normalizedWeight * Mathf.Max(points.Length, 1), 0.5f, 2.5f);
             float gizmoSize = 0.035f + (0.015f * visualWeight);
-            Gizmos.DrawSphere(transform.TransformPoint(activeSamplePoints[i].localPosition), gizmoSize);
+            Gizmos.DrawSphere(transform.TransformPoint(points[i].localPosition), gizmoSize);
         }
+    }
+
+    public void RecalculateManualPointWeights()
+    {
+        if (manualSamplePoints == null || manualSamplePoints.Length == 0)
+        {
+            return;
+        }
+
+        if (!TryGetCombinedLocalBounds(out Bounds worldBounds))
+        {
+            return;
+        }
+
+        // Convert bounds to local space so comparison matches stored local positions
+        Vector3 localMin = transform.InverseTransformPoint(worldBounds.min);
+        Vector3 localMax = transform.InverseTransformPoint(worldBounds.max);
+
+        for (int i = 0; i < manualSamplePoints.Length; i++)
+        {
+            float weight = calculateWeight(localMin, localMax, manualSamplePoints[i].localPosition.y);
+            weight = Mathf.Max(0.2f, weight);
+            manualSamplePoints[i] = new SamplePoint(manualSamplePoints[i].localPosition, Mathf.Max(0.2f, weight));
+        }
+    }
+
+    public float calculateWeight(Vector3 localMin, Vector3 localMax, float sample_y_position)
+    {
+        float hull_level = Mathf.InverseLerp(localMin.y, hull_height, sample_y_position);
+        return 1f - Mathf.Abs(hull_level - 0.3f) * 2f;
     }
 }

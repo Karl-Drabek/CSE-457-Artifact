@@ -43,10 +43,12 @@ sealed class WaterBuoyancyEditor : Editor
     SerializedProperty horizontalEdgeInsetProperty;
     SerializedProperty xEdgeOffsetProperty;
     SerializedProperty zEdgeOffsetProperty;
+    SerializedProperty pitchDampingProperty;
 
-    bool scenePlacementEnabled;
-    bool pointEditingEnabled;
+    static bool scenePlacementEnabled;
+    static bool pointEditingEnabled;
     Mesh bakedSkinnedMesh;
+    static Tool previousTool = Tool.None;
 
     WaterBuoyancy TargetBuoyancy => (WaterBuoyancy)target;
 
@@ -66,6 +68,7 @@ sealed class WaterBuoyancyEditor : Editor
         horizontalEdgeInsetProperty = serializedObject.FindProperty("horizontalEdgeInset");
         xEdgeOffsetProperty = serializedObject.FindProperty("xEdgeOffset");
         zEdgeOffsetProperty = serializedObject.FindProperty("zEdgeOffset");
+        pitchDampingProperty = serializedObject.FindProperty("pitchDamping");
 
         if (bakedSkinnedMesh == null)
         {
@@ -102,6 +105,7 @@ sealed class WaterBuoyancyEditor : Editor
         EditorGUILayout.LabelField("Damping", EditorStyles.boldLabel);
         EditorGUILayout.PropertyField(waterDragProperty);
         EditorGUILayout.PropertyField(waterAngularDragProperty);
+        EditorGUILayout.PropertyField(pitchDampingProperty);
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Sampling", EditorStyles.boldLabel);
@@ -123,11 +127,45 @@ sealed class WaterBuoyancyEditor : Editor
         }
         else if (inspectorSamplingMode == InspectorSamplingMode.Raycast)
         {
-            DisableSceneTools();
             EditorGUILayout.PropertyField(horizontalSampleCountProperty);
             EditorGUILayout.PropertyField(horizontalEdgeInsetProperty);
             EditorGUILayout.PropertyField(xEdgeOffsetProperty);
             EditorGUILayout.PropertyField(zEdgeOffsetProperty);
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Hull Shape", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("hull_height"),
+                new GUIContent("Hull Height", "Maximum local y value of the hull"));
+            if (GUILayout.Button("Recalculate Weights"))
+            {
+                TargetBuoyancy.RecalculateManualPointWeights();
+                EditorUtility.SetDirty(TargetBuoyancy);
+            }
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button(scenePlacementEnabled ? "Stop Adding Points" : "Add Points On Mesh"))
+                {
+                    if (scenePlacementEnabled)
+                        DisableScenePlacement();
+                    else
+                        EnableScenePlacement();
+                }
+
+                using (new EditorGUI.DisabledScope(manualSamplePointsProperty.arraySize == 0))
+                {
+                    if (GUILayout.Button("Clear Manual Points"))
+                    {
+                        manualSamplePointsProperty.ClearArray();
+                        serializedObject.ApplyModifiedProperties();
+                        SceneView.RepaintAll();
+                    }
+                }
+            }
+
+            if (!HasPlaceableMesh())
+            {
+                EditorGUILayout.HelpBox("No MeshFilter or SkinnedMeshRenderer found for scene-click placement.", MessageType.Warning);
+            }
         }
         else
         {
@@ -152,13 +190,10 @@ sealed class WaterBuoyancyEditor : Editor
         {
             if (GUILayout.Button(scenePlacementEnabled ? "Stop Scene Placement" : "Start Scene Placement"))
             {
-                scenePlacementEnabled = !scenePlacementEnabled;
                 if (scenePlacementEnabled)
-                {
-                    pointEditingEnabled = false;
-                }
-
-                SceneView.RepaintAll();
+                    DisableScenePlacement();
+                else
+                    EnableScenePlacement();
             }
 
             if (GUILayout.Button(pointEditingEnabled ? "Stop Point Editing" : "Start Point Editing"))
@@ -201,11 +236,20 @@ sealed class WaterBuoyancyEditor : Editor
     {
         serializedObject.Update();
 
-        if (GetInspectorSamplingMode() != InspectorSamplingMode.Manual)
+        InspectorSamplingMode samplingMode = GetInspectorSamplingMode();
+        bool allowSceneTools = samplingMode == InspectorSamplingMode.Manual
+            || samplingMode == InspectorSamplingMode.Raycast;
+        if (!allowSceneTools)
         {
             DisableSceneTools();
             serializedObject.ApplyModifiedProperties();
             return;
+        }
+
+        // Draw manual points in orange whenever in raycast mode
+        if (samplingMode == InspectorSamplingMode.Raycast)
+        {
+            DrawManualPointGizmos();
         }
 
         if (scenePlacementEnabled)
@@ -219,6 +263,44 @@ sealed class WaterBuoyancyEditor : Editor
 
         serializedObject.ApplyModifiedProperties();
     }
+
+
+void DrawManualPointGizmos()
+{
+    if (manualSamplePointsProperty.arraySize == 0)
+    {
+        return;
+    }
+
+    float totalWeight = GetTotalWeight();
+
+    for (int i = 0; i < manualSamplePointsProperty.arraySize; i++)
+    {
+        SerializedProperty pointProperty = manualSamplePointsProperty.GetArrayElementAtIndex(i);
+        SerializedProperty positionProperty = pointProperty.FindPropertyRelative(LocalPositionFieldName);
+        SerializedProperty weightProperty = pointProperty.FindPropertyRelative(WeightFieldName);
+
+        Vector3 worldPosition = TargetBuoyancy.transform.TransformPoint(positionProperty.vector3Value);
+        float gizmoSize = 0.1f;
+
+        // Draw faint version through geometry so occluded points are still visible
+        using (new Handles.DrawingScope(new Color(1f, 0.5f, 0.1f, 0.15f)))
+        {
+            Handles.zTest = UnityEngine.Rendering.CompareFunction.Greater;
+            Handles.SphereHandleCap(0, worldPosition, Quaternion.identity, gizmoSize, EventType.Repaint);
+        }
+
+        // Draw full opacity version on top when not occluded
+        using (new Handles.DrawingScope(new Color(1f, 0.5f, 0.1f, 0.9f)))
+        {
+            Handles.zTest = UnityEngine.Rendering.CompareFunction.LessEqual;
+            Handles.SphereHandleCap(0, worldPosition, Quaternion.identity, gizmoSize, EventType.Repaint);
+        }
+    }
+
+    // Always reset zTest after drawing so other scene handles aren't affected
+    Handles.zTest = UnityEngine.Rendering.CompareFunction.Always;
+}
 
     void DrawExistingPointHandles()
     {
@@ -262,44 +344,84 @@ sealed class WaterBuoyancyEditor : Editor
         }
 
         Event currentEvent = Event.current;
+
+        int controlId = GUIUtility.GetControlID(FocusType.Keyboard);
+
+        if (currentEvent.type == EventType.Layout)
+        {
+            HandleUtility.AddDefaultControl(controlId);
+            return;
+        }
+
+        HandleUtility.AddDefaultControl(controlId);
+
+        //if (currentEvent.type == EventType.Repaint)
+        //{
+        //    Handles.BeginGUI();
+        //    GUILayout.BeginArea(new Rect(10, 10, 280, 60));
+        //    GUI.color = new Color(0.2f, 0.8f, 1f, 0.95f);
+        //    GUILayout.BeginVertical(EditorStyles.helpBox);
+        //    GUILayout.Label("Point Placement Active", EditorStyles.boldLabel);
+        //    GUILayout.Label("Left click mesh to place  |  Esc or Right click to exit");
+        //    GUILayout.EndVertical();
+        //    GUI.color = Color.white;
+        //    GUILayout.EndArea();
+        //    Handles.EndGUI();
+        //}
+
         if (currentEvent.alt)
         {
             return;
         }
 
-        int controlId = GUIUtility.GetControlID(FocusType.Passive);
-        HandleUtility.AddDefaultControl(controlId);
 
-        Ray ray = HandleUtility.GUIPointToWorldRay(currentEvent.mousePosition);
-        if (!TryGetNearestMeshHit(ray, out MeshHit hit))
+        if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0)
         {
-            if (currentEvent.type == EventType.MouseMove)
+            Ray ray = HandleUtility.GUIPointToWorldRay(currentEvent.mousePosition);
+            if (TryGetNearestMeshHit(ray, out MeshHit hit))
             {
-                SceneView.RepaintAll();
+                Vector3 localPosition = TargetBuoyancy.transform.InverseTransformPoint(hit.point);
+                // Weight based on Y position within bounds at placement time
+                if (TargetBuoyancy.TryGetCombinedWorldBounds(out Bounds worldBounds))
+                {
+                    // Convert bounds to local space so comparison matches stored local positions
+                    Vector3 localMin = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.min);
+                    Vector3 localMax = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.max);
+
+                    float weight = TargetBuoyancy.calculateWeight(localMin, localMax, localPosition.y);
+                    weight = Mathf.Max(0.2f, weight);
+                    AddManualPoint(localPosition, weight);
+                }
+                else
+                {
+                    AddManualPoint(localPosition, 1f);
+                }
+
+                GUIUtility.hotControl = controlId;
+                currentEvent.Use();
+                float previewSize = HandleUtility.GetHandleSize(hit.point) * PlacementPreviewSizeScale;
+                using (new Handles.DrawingScope(PlacementPreviewColor))
+                {
+                    Handles.SphereHandleCap(0, hit.point, Quaternion.identity, previewSize, EventType.Repaint);
+                    Handles.DrawLine(hit.point, hit.point + (hit.normal * previewSize * 2f));
+                }
+
             }
-
-            return;
         }
 
-        float previewSize = HandleUtility.GetHandleSize(hit.point) * PlacementPreviewSizeScale;
-        using (new Handles.DrawingScope(PlacementPreviewColor))
+        if ((currentEvent.type == EventType.MouseDown && currentEvent.button == 1)
+            || (currentEvent.type == EventType.KeyDown && currentEvent.keyCode == KeyCode.Escape))
         {
-            Handles.SphereHandleCap(0, hit.point, Quaternion.identity, previewSize, EventType.Repaint);
-            Handles.DrawLine(hit.point, hit.point + (hit.normal * previewSize * 2f));
+            DisableScenePlacement();
+            currentEvent.Use();
         }
 
-        if (currentEvent.type == EventType.MouseMove)
+        if (currentEvent.type == EventType.MouseMove || currentEvent.type == EventType.MouseDrag)
         {
             SceneView.RepaintAll();
         }
-
-        if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0 && !currentEvent.alt)
-        {
-            Vector3 localPosition = TargetBuoyancy.transform.InverseTransformPoint(hit.point);
-            AddManualPoint(localPosition, 1f);
-            currentEvent.Use();
-        }
     }
+
 
     void AddManualPoint(Vector3 localPosition, float weight)
     {
@@ -525,8 +647,32 @@ sealed class WaterBuoyancyEditor : Editor
 
     void DisableSceneTools()
     {
+        if (scenePlacementEnabled && Tools.current == Tool.None)
+        {
+            Tools.current = previousTool;
+        }
         scenePlacementEnabled = false;
         pointEditingEnabled = false;
+    }
+
+    void EnableScenePlacement()
+    {
+        scenePlacementEnabled = true;
+        pointEditingEnabled = false;
+        previousTool = Tools.current;
+        Tools.current = Tool.None; // stops Unity consuming mouse clicks for selection/transform
+        SceneView.lastActiveSceneView?.Focus(); // pull focus to scene view
+        SceneView.RepaintAll();
+    }
+
+    void DisableScenePlacement()
+    {
+        scenePlacementEnabled = false;
+        if (Tools.current == Tool.None)
+        {
+            Tools.current = previousTool;
+        }
+        SceneView.RepaintAll();
     }
 
     InspectorSamplingMode GetInspectorSamplingMode()
