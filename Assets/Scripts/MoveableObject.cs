@@ -3,23 +3,18 @@ using UnityEngine;
 public class MoveableObject : MonoBehaviour
 {
     private bool selected;
-    private Vector3 startingPos;
-
-    private float opacity;
 
     [SerializeField]
     [Range(0f, 1f)]
     float selected_opacity = 0.8f;
     const float DEFAULT_OPACITY = 0f;
-    Renderer renderer;
+    Renderer objectRenderer;
 
 
     void Awake()
     {
         selected = false;
-        startingPos = transform.position;
-        opacity = 0f;
-        renderer = GetComponent<Renderer>();
+        objectRenderer = GetComponent<Renderer>();
     }
 
     // Update is called once per frame
@@ -49,6 +44,12 @@ public class MoveableObject : MonoBehaviour
         gameObject.layer = 0;
     }
 
+    public void Delete()
+    {
+        selected = false;
+        Destroy(gameObject);
+    }
+
     public Vector3 GetPosition()
     {
         return transform.position;
@@ -64,7 +65,7 @@ public class MoveableObject : MonoBehaviour
 
     void SetOpacity(float opacity)
     {
-        Material[] materials = renderer.materials;
+        Material[] materials = objectRenderer.materials;
         for (int j = 0; j < materials.Length; j++)
         {
             Material mat = materials[j];
@@ -81,6 +82,6 @@ public class MoveableObject : MonoBehaviour
             color.a = opacity;
             mat.color = color;
         }
-        renderer.materials = materials;
+        objectRenderer.materials = materials;
     }
 }

@@ -119,6 +119,12 @@ public class ShipBuildController : MonoBehaviour
             // Do this so we dont have 2 audio outputs at the same time
             mainCamera.gameObject.SetActive(false);
 
+            if (moveable != null)
+            {
+                moveable.Delete();
+                moveable = null;
+            }
+
             SceneManager.SetActiveScene(loadedScene);
 
             BoatFollowCamera bfc = FindAnyObjectByType<BoatFollowCamera>();
