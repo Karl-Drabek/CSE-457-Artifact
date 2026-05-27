@@ -127,3 +127,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5ae2764b586423459c4d125da22de8f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MoveableObject
+  selected_opacity: 0.801
