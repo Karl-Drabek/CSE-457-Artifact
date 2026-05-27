@@ -2,12 +2,18 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 
 public class ShipBuildController : MonoBehaviour
 {
     [SerializeField]
     private GameObject obj;
+
+    [SerializeField]
+    private GameObject shipParent;
+
+    const int SAIL_SCENE_INDEX = 0;
 
     private Camera mainCamera;
     public static ShipBuildController Instance;
@@ -75,7 +81,7 @@ public class ShipBuildController : MonoBehaviour
                 if (target != null)
                 {
                     pos = pos + Vector3.up * target.transform.localScale.y;
-                    new_object = Instantiate(obj, pos, Quaternion.identity);
+                    new_object = Instantiate(obj, pos, Quaternion.identity, shipParent.transform);
                     moveable = new_object.GetComponent<MoveableObject>();
                     moveable.SetSelected();
                 }
@@ -83,7 +89,7 @@ public class ShipBuildController : MonoBehaviour
         }
         else if (leftClick.WasPressedThisFrame() && moveable != null)
         {
-            Instantiate(obj, moveable.GetPosition(), moveable.gameObject.transform.rotation);
+            Instantiate(obj, moveable.GetPosition(), moveable.gameObject.transform.rotation, shipParent.transform);
         }
     }
 
@@ -91,6 +97,71 @@ public class ShipBuildController : MonoBehaviour
     {
         Ray ray = Instance.mainCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
         return Physics.Raycast(ray, out RayHit);
+    }
+
+    public void SwitchToSailScene()
+    {
+        StartCoroutine(LoadAndActivate(SAIL_SCENE_INDEX));
+    }
+
+    IEnumerator LoadAndActivate(int index)
+    {
+        AsyncOperation op = SceneManager.LoadSceneAsync(index, LoadSceneMode.Additive);
+
+        yield return op;
+
+        Scene loadedScene = SceneManager.GetSceneByBuildIndex(index);
+
+        if (loadedScene.isLoaded)
+        {
+            MoveBoatToScene();
+
+            // Do this so we dont have 2 audio outputs at the same time
+            mainCamera.gameObject.SetActive(false);
+
+            SceneManager.SetActiveScene(loadedScene);
+
+            BoatFollowCamera bfc = FindAnyObjectByType<BoatFollowCamera>();
+            bfc.target = shipParent.transform;
+           
+
+            // Unload the original scene after moving the boat out of it
+            yield return SceneManager.UnloadSceneAsync(1);
+        }
+    }
+
+    public void MoveBoatToScene()
+    {
+        Scene targetScene = SceneManager.GetSceneByBuildIndex(SAIL_SCENE_INDEX);
+        if (shipParent.transform.parent != null)
+        {
+            shipParent.transform.SetParent(null);
+        }
+        AddBuoyancyToShip();
+        AddShipMovement();
+        SetShipPhysics();
+        SceneManager.MoveGameObjectToScene(shipParent, targetScene);
+
+    }
+
+    void SetShipPhysics()
+    {
+        Rigidbody rigid = shipParent.GetComponent<Rigidbody>();
+        rigid.centerOfMass = new Vector3(0f, -5f, -0.3f);
+    }
+
+    void AddBuoyancyToShip()
+    {
+        WaterBuoyancy buoyancy = shipParent.AddComponent<WaterBuoyancy>();
+        buoyancy.waterAngularDrag = 5f;
+        buoyancy.objectDensity = 0.25f;
+        buoyancy.zEdgeOffset = -0.3f;
+        buoyancy.hull_height = -2.2f;
+    }
+
+    void AddShipMovement()
+    {
+        ShipController controller = shipParent.AddComponent<ShipController>();
     }
 
 

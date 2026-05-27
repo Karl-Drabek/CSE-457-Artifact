@@ -74,26 +74,26 @@ public class WaterBuoyancy : MonoBehaviour
     [FormerlySerializedAs("mass")]
     [FormerlySerializedAs("displacedMass")]
     [Min(MinDensity)]
-    public float objectDensity = 1f;
+    public float objectDensity = 0.25f;
 
     [Min(0.001f)]
-    public float maxSubmergence = 0.5f;
+    public float maxSubmergence = 2f;
 
     [Range(0f, 1f)]
-    public float surfaceNormalInfluence = 0.2f;
+    public float surfaceNormalInfluence = 0.1f;
 
     [Min(0f)]
-    public float waterDrag = 2f;
+    public float waterDrag = 5f;
 
     [FormerlySerializedAs("generalAngularDrag")]
     [Min(0f)]
-    public float waterAngularDrag = 1f;
+    public float waterAngularDrag = 5f;
 
     [SerializeField]
     SampleMode sampleMode = SampleMode.Raycast;
 
     [Range(2, 20)]
-    public int horizontalSampleCount = 3;
+    public int horizontalSampleCount = 8;
 
     [Range(2, 6)]
     public int verticalSampleCount = 3;
@@ -111,7 +111,7 @@ public class WaterBuoyancy : MonoBehaviour
     public float zEdgeOffset = 0f;
 
     [Range(-5f, 5f)]
-    public float hull_height = 1.065f;
+    public float hull_height = 1f;
 
     [Min(0f)]
     public float pitchDamping = 2f;
