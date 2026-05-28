@@ -1,6 +1,8 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 public class ShipBuilder : MonoBehaviour
 {
@@ -12,6 +14,10 @@ public class ShipBuilder : MonoBehaviour
 
     [Header("Preview")]
     [SerializeField] private Material previewMaterial;
+
+    [Header("Scene Transfer")]
+    [SerializeField] private string sailSceneName = "SampleScene";
+    [SerializeField] private string builderSceneName = "ShipBuilding";
 
     private ShipPartDefinition selectedPart;
     private bool hullPlaced = false;
@@ -90,8 +96,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        previewObject.SetActive(true);
-
         SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
 
         if (snapPoint == null)
@@ -154,14 +158,12 @@ public class ShipBuilder : MonoBehaviour
         previewObject = Instantiate(selectedPart.prefab);
         previewObject.name = selectedPart.displayName + " Preview";
 
-        // Disable all colliders so the preview does not block raycasts.
         Collider[] colliders = previewObject.GetComponentsInChildren<Collider>();
         foreach (Collider collider in colliders)
         {
             collider.enabled = false;
         }
 
-        // Disable snap points on the preview so they do not count as real snap points.
         SnapPoint[] snapPoints = previewObject.GetComponentsInChildren<SnapPoint>();
         foreach (SnapPoint snapPoint in snapPoints)
         {
@@ -250,6 +252,96 @@ public class ShipBuilder : MonoBehaviour
                 snapPoint.acceptsPartType == selectedPart.partType;
 
             snapPoint.SetVisible(shouldShow);
+        }
+    }
+
+    public void SwitchToSailScene()
+    {
+        if (!hullPlaced)
+        {
+            Debug.Log("Cannot switch scenes: no hull has been placed.");
+            return;
+        }
+
+        StartCoroutine(LoadAndActivateSailScene());
+    }
+
+    IEnumerator LoadAndActivateSailScene()
+    {
+        AsyncOperation op = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
+
+        yield return op;
+
+        Scene loadedScene = SceneManager.GetSceneByName(sailSceneName);
+
+        if (!loadedScene.isLoaded)
+        {
+            Debug.LogWarning("Sail scene did not load: " + sailSceneName);
+            yield break;
+        }
+
+        MoveBoatToSailScene(loadedScene);
+
+        Camera builderCamera = Camera.main;
+        if (builderCamera != null)
+        {
+            builderCamera.gameObject.SetActive(false);
+        }
+
+        selectedPart = null;
+        DestroyPreview();
+        UpdateSnapPointVisibility();
+
+        SceneManager.SetActiveScene(loadedScene);
+
+        BoatFollowCamera boatFollowCamera = FindAnyObjectByType<BoatFollowCamera>();
+        if (boatFollowCamera != null)
+        {
+            boatFollowCamera.target = shipRoot;
+        }
+        else
+        {
+            Debug.LogWarning("BoatFollowCamera not found in sail scene.");
+        }
+
+        yield return SceneManager.UnloadSceneAsync(builderSceneName);
+    }
+
+    void MoveBoatToSailScene(Scene targetScene)
+    {
+        if (shipRoot.parent != null)
+        {
+            shipRoot.SetParent(null);
+        }
+
+        PrepareBoatForSailing();
+
+        SceneManager.MoveGameObjectToScene(shipRoot.gameObject, targetScene);
+    }
+
+    void PrepareBoatForSailing()
+    {
+        Rigidbody rb = shipRoot.GetComponent<Rigidbody>();
+
+        if (rb == null)
+        {
+            rb = shipRoot.gameObject.AddComponent<Rigidbody>();
+        }
+
+        rb.centerOfMass = new Vector3(0f, -5f, -0.3f);
+
+        if (shipRoot.GetComponent<WaterBuoyancy>() == null)
+        {
+            WaterBuoyancy buoyancy = shipRoot.gameObject.AddComponent<WaterBuoyancy>();
+            buoyancy.waterAngularDrag = 5f;
+            buoyancy.objectDensity = 0.25f;
+            buoyancy.zEdgeOffset = -0.3f;
+            buoyancy.hull_height = -2.2f;
+        }
+
+        if (shipRoot.GetComponent<ShipController>() == null)
+        {
+            shipRoot.gameObject.AddComponent<ShipController>();
         }
     }
 }
