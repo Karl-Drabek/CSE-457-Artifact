@@ -789,11 +789,12 @@ public class UrpLowPolyWater : MonoBehaviour
     {
         Vector3 surfacePoint = sourceVertex;
         Vector2 anchorXZ = new Vector2(sourceVertex.x, sourceVertex.z);
+        float waveStrengthMultiplier = GetWaveStrengthMultiplier(anchorXZ);
         int waveCount = GetActiveWaveCount();
 
         for (int i = 0; i < waves.Length; i++)
         {
-            ApplyGerstnerWave(ref surfacePoint, anchorXZ, timeSeconds, waves[i], waveCount);
+            ApplyGerstnerWave(ref surfacePoint, anchorXZ, timeSeconds, waves[i], waveCount, waveStrengthMultiplier);
         }
 
         ApplyWhirlpoolFeatures(ref surfacePoint, timeSeconds);
@@ -807,9 +808,11 @@ public class UrpLowPolyWater : MonoBehaviour
         Vector2 anchorXZ,
         float timeSeconds,
         GerstnerWave wave,
-        int totalWaveCount)
+        int totalWaveCount,
+        float waveStrengthMultiplier)
     {
-        if (wave.amplitude <= 0f)
+        float effectiveAmplitude = wave.amplitude * Mathf.Max(waveStrengthMultiplier, 0f);
+        if (effectiveAmplitude <= 0f)
         {
             return;
         }
@@ -820,14 +823,14 @@ public class UrpLowPolyWater : MonoBehaviour
         float clampedSteepness = Mathf.Clamp01(wave.steepness);
         float horizontalFactor = Mathf.Min(
             1f,
-            clampedSteepness / Mathf.Max(waveNumber * wave.amplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
+            clampedSteepness / Mathf.Max(waveNumber * effectiveAmplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
         float phase = waveNumber * Vector2.Dot(normalizedDirection, anchorXZ) + timeSeconds * wave.speed;
         float cosine = Mathf.Cos(phase);
         float sine = Mathf.Sin(phase);
 
-        surfacePoint.x += normalizedDirection.x * (horizontalFactor * wave.amplitude * cosine);
-        surfacePoint.z += normalizedDirection.y * (horizontalFactor * wave.amplitude * cosine);
-        surfacePoint.y += wave.amplitude * sine;
+        surfacePoint.x += normalizedDirection.x * (horizontalFactor * effectiveAmplitude * cosine);
+        surfacePoint.z += normalizedDirection.y * (horizontalFactor * effectiveAmplitude * cosine);
+        surfacePoint.y += effectiveAmplitude * sine;
     }
 
     // Adds world-space whirlpool depth and swirl offsets after the wave displacement is applied.
@@ -1010,11 +1013,16 @@ public class UrpLowPolyWater : MonoBehaviour
     {
         int waveCount = GetActiveWaveCount();
         float maxDisplacement = 0f;
+        float waveStrengthMultiplier = GetMaximumWaveStrengthMultiplier();
 
         for (int i = 0; i < waves.Length; i++)
         {
             GerstnerWave wave = waves[i];
-            maxDisplacement += ComputeWaveHorizontalDisplacement(wave.amplitude, wave.waveLength, wave.steepness, waveCount);
+            maxDisplacement += ComputeWaveHorizontalDisplacement(
+                wave.amplitude * waveStrengthMultiplier,
+                wave.waveLength,
+                wave.steepness,
+                waveCount);
         }
 
         maxDisplacement += ComputeMaxWhirlpoolHorizontalDisplacement();
@@ -1052,6 +1060,27 @@ public class UrpLowPolyWater : MonoBehaviour
             1f,
             clampedSteepness / Mathf.Max(waveNumber * amplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
         return horizontalFactor * amplitude;
+    }
+
+    float GetWaveStrengthMultiplier(Vector2 localAnchorXZ)
+    {
+        if (OpenWorldManager.Instance == null)
+        {
+            return 1f;
+        }
+
+        Vector3 worldAnchor = transform.TransformPoint(new Vector3(localAnchorXZ.x, sampledBaseHeight, localAnchorXZ.y));
+        return OpenWorldManager.Instance.GetWaveStrengthMultiplier(worldAnchor);
+    }
+
+    float GetMaximumWaveStrengthMultiplier()
+    {
+        if (OpenWorldManager.Instance == null)
+        {
+            return 1f;
+        }
+
+        return OpenWorldManager.Instance.GetMaximumWaveStrengthMultiplier();
     }
 
     // Computes the total possible vertical wave excursion for bounds padding.

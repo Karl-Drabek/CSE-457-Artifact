@@ -581,6 +581,37 @@ MonoBehaviour:
   m_ShadowLayerMask: 1
   m_RenderingLayers: 1
   m_ShadowRenderingLayers: 1
+--- !u!1 &576074441
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 576074442}
+  m_Layer: 0
+  m_Name: GeneratedChunks
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &576074442
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 576074441}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2117272470}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &697453714
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -964,6 +995,68 @@ MonoBehaviour:
   detailNoiseScale: 0.55
   detailNoiseStrength: 0.35
   normalSampleDistance: 0.15
+--- !u!1 &1181542291
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1181542292}
+  m_Layer: 0
+  m_Name: GeneratedHazards
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1181542292
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1181542291}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2117272470}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1315274648
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1315274649}
+  m_Layer: 0
+  m_Name: GeneratedEffects
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1315274649
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1315274648}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2117272470}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!43 &1380327533
 Mesh:
   m_ObjectHideFlags: 0
@@ -1596,6 +1689,117 @@ MeshCollider:
   m_Convex: 1
   m_CookingOptions: 30
   m_Mesh: {fileID: 8880667030473695098, guid: 6c53f3eea5bb81b4ca966ba2941bdc60, type: 3}
+--- !u!1 &2117272469
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2117272470}
+  - component: {fileID: 2117272471}
+  m_Layer: 0
+  m_Name: WorldRoot
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2117272470
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2117272469}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 576074442}
+  - {fileID: 1181542292}
+  - {fileID: 1315274649}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2117272471
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2117272469}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a4f4326bb7434bafbc98e8b8c2be41ad, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::OpenWorldManager
+  boatRoot: {fileID: 0}
+  boatRootName: BoatParent
+  sceneWorld: {fileID: 1503298132}
+  generatedChunksRoot: {fileID: 576074442}
+  generatedHazardsRoot: {fileID: 1181542292}
+  generatedEffectsRoot: {fileID: 1315274649}
+  worldSeed: 457
+  waterHeight: 0
+  terrainBaseHeight: -10
+  deepOceanDepth: 24
+  islandRise: 30
+  islandThreshold: 0.58
+  islandBlend: 0.14
+  spawnSafeRadius: 180
+  outerIslandHeightMultiplier: 0.35
+  outerShorelineDetailMultiplier: 0.45
+  chunkSize: 140
+  chunkResolution: 40
+  activeChunkRadius: 2
+  preloadChunkBuffer: 1
+  borderStartDistance: 5000
+  borderThickness: 260
+  interiorIcebergStartDistance: 0
+  maxWaveStrengthMultiplier: 2.35
+  hazardSpawnExclusionRadius: 32
+  icebergPrefabs:
+  - {fileID: 4899583741315840764, guid: 058c71a43cc03444fbb222f74297f85a, type: 3}
+  - {fileID: 7799598339947194755, guid: 46ffc482a5b7ead4180fcaee8b20e708, type: 3}
+  - {fileID: 8696482617218564254, guid: 4e4ae207bef64494986ca3bfeed90b05, type: 3}
+  - {fileID: 3394502148483450971, guid: 6d35f3befa11c3f49ac6b0964dd94444, type: 3}
+  - {fileID: 9065609774188061675, guid: aa1ff88e649441a4f95b5f0368faecd7, type: 3}
+  treePrefabs:
+  - {fileID: 8377495617986386806, guid: 14d94d92b89fde24da3ddcbbedb05b3a, type: 3}
+  - {fileID: 5960436006095334623, guid: 1a347d038c462b54881e43bbd5be4128, type: 3}
+  magmaPrefabs:
+  - {fileID: 323678428011913138, guid: 4804b87a6c8c028429e3dad6ac55f71e, type: 3}
+  - {fileID: 1993587541353703577, guid: ea2d9ebe77667c44f9e1197ab3d69758, type: 3}
+  - {fileID: 7448900680707013588, guid: c463724616cc10749ba89c16eedc34a3, type: 3}
+  - {fileID: 6155273105489989236, guid: 785879b7ffa5fed41922554dbf8d5f92, type: 3}
+  - {fileID: 7169016033262652877, guid: 5f934de1de3bde448bd5355432662e96, type: 3}
+  icebergScaleRange: {x: 0.85, y: 1.8}
+  treeScaleRange: {x: 3, y: 5}
+  magmaScaleRange: {x: 0.85, y: 1.8}
+  biomePatchScale: 0.0016
+  biomePatchSizeNoiseScale: 0.0008
+  biomePatchScaleMultiplierRange: {x: 0.75, y: 1.35}
+  biomeDensityPatchScale: 0.0024
+  biomeDensityMin: 0.7
+  biomeDensityMax: 0.72
+  distanceDensityBias: 0.35
+  icebergBiomeShare: 0.5
+  treeBiomeShare: 0.12
+  treeBiomeCountMultiplier: 6
+  treeBiomeSpacingMultiplier: 0.2
+  treeBiomeMaxCount: 14
+  treeBiomeMinSpacing: 6
+  enableDistanceFog: 1
+  calmFogColor: {r: 0.76, g: 0.82, b: 0.88, a: 1}
+  outerFogColor: {r: 0.86, g: 0.92, b: 0.96, a: 1}
+  calmFogStartFraction: 0.62
+  calmFogEndFraction: 0.94
+  outerFogStartFraction: 0.42
+  outerFogEndFraction: 0.78
+  freezeTimeOnWin: 1
 --- !u!4 &1100956923358273623
 Transform:
   m_ObjectHideFlags: 0
@@ -1721,3 +1925,4 @@ SceneRoots:
   - {fileID: 1503298133}
   - {fileID: 1100956923358273623}
   - {fileID: 1847678685}
+  - {fileID: 2117272470}

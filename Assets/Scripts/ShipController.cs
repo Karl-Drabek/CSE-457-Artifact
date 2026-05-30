@@ -9,16 +9,16 @@ public class ShipController : MonoBehaviour
 
     [Header("Thrust")]
     [Min(0f)]
-    public float forwardAcceleration = 18f;
+    public float forwardAcceleration = 30f;
 
     [Min(0f)]
-    public float reverseAcceleration = 10f;
+    public float reverseAcceleration = 16f;
 
     [Min(0f)]
-    public float maxForwardSpeed = 12f;
+    public float maxForwardSpeed = 20f;
 
     [Min(0f)]
-    public float maxReverseSpeed = 4f;
+    public float maxReverseSpeed = 7f;
 
     [Header("Steering")]
     [Min(0f)]
