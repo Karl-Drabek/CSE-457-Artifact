@@ -2,5 +2,6 @@ public enum ShipPartType
 {
     Hull,
     Mast,
-    Sail
+    Sail,
+    Motor
 }
