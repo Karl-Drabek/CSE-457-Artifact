@@ -4,17 +4,10 @@ public class MoveableObject : MonoBehaviour
 {
     private bool selected;
 
-    [SerializeField]
-    [Range(0f, 1f)]
-    float selected_opacity = 0.8f;
-    const float DEFAULT_OPACITY = 0f;
-    Renderer objectRenderer;
-
 
     void Awake()
     {
         selected = false;
-        objectRenderer = GetComponent<Renderer>();
     }
 
     // Update is called once per frame
@@ -34,13 +27,11 @@ public class MoveableObject : MonoBehaviour
     {
         selected = true;
         gameObject.layer = 2;
-        SetOpacity(selected_opacity);
     }
 
     public void SetDeselected()
     {
         selected = false;
-        SetOpacity(DEFAULT_OPACITY);
         gameObject.layer = 0;
     }
 
@@ -61,27 +52,5 @@ public class MoveableObject : MonoBehaviour
         gameObject.transform.up = norm;
         transform.rotation = Quaternion.FromToRotation(Vector3.up, norm);
         transform.position = rayHit.point + norm * transform.localScale.y;
-    }
-
-    void SetOpacity(float opacity)
-    {
-        Material[] materials = objectRenderer.materials;
-        for (int j = 0; j < materials.Length; j++)
-        {
-            Material mat = materials[j];
-            if (opacity > 0f)
-            {
-                ShipBuildController.SetMaterialTransparent(mat);
-                
-            }
-            else
-            {
-                ShipBuildController.SetMaterialOpaque(mat);
-            }
-            Color color = mat.color;
-            color.a = opacity;
-            mat.color = color;
-        }
-        objectRenderer.materials = materials;
     }
 }

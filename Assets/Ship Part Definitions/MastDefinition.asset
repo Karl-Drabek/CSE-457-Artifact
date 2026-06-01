@@ -16,3 +16,6 @@ MonoBehaviour:
   partType: 1
   prefab: {fileID: 8023743775597941296, guid: fce245716c152db48893bcd67946c5ee, type: 3}
   icon: {fileID: 0}
+  material: {fileID: 2100000, guid: 761bd601a432e2a4b80ede40297bff79, type: 2}
+  mass: 2
+  centerOfMass: {x: -0.25, y: 0, z: 0}

@@ -1,2 +1,14 @@
 fileFormatVersion: 2
 guid: 367cd71a649ad3a4fb4904b9f3305692
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - shipRoot: {instanceID: 0}
+  - previewMaterial: {instanceID: 0}
+  - hullButton: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

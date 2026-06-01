@@ -7,4 +7,7 @@ public class ShipPartDefinition : ScriptableObject
     public ShipPartType partType;
     public GameObject prefab;
     public Sprite icon;
+    public Material material;
+    public float mass;
+    public Vector3 centerOfMass;
 }

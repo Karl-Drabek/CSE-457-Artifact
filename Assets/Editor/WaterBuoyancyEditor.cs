@@ -393,7 +393,7 @@ void DrawManualPointGizmos()
                     Vector3 localMin = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.min);
                     Vector3 localMax = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.max);
 
-                    float weight = TargetBuoyancy.calculateWeight(localMin, localMax, localPosition.y);
+                    float weight = TargetBuoyancy.calculateWeight(localMin.y, localPosition.y);
                     weight = Mathf.Max(0.2f, weight);
                     AddManualPoint(localPosition, weight);
                 }

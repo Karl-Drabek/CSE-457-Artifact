@@ -10,9 +10,12 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 3bace6dae5a29904b81058dbe60a20fc, type: 3}
-  m_Name: HullDefinition
+  m_Name: RaftDefinition
   m_EditorClassIdentifier: Assembly-CSharp::ShipPartDefinition
-  displayName: Hull
+  displayName: Raft
   partType: 0
   prefab: {fileID: 8958473608321063810, guid: c0cb1804ca7a7fb4d9f508807d853962, type: 3}
   icon: {fileID: 0}
+  material: {fileID: 2100000, guid: ab3aba4dd691fdb48a12b11e50034828, type: 2}
+  mass: 4
+  centerOfMass: {x: 0, y: 0.1, z: 0}

@@ -1,5 +1,7 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -19,8 +21,16 @@ public class ShipBuilder : MonoBehaviour
     [SerializeField] private string sailSceneName = "SampleScene";
     [SerializeField] private string builderSceneName = "ShipBuilding";
 
+    [Header("Hull Button")]
+    [SerializeField] private Button hullButton;
+
     private ShipPartDefinition selectedPart;
     private bool hullPlaced = false;
+    private Vector3[] buoyancy_vertices = { };
+    private Vector3 hull_base_point = Vector3.zero;
+    private float hull_local_height = 0f;
+    private Vector3 weightedCenterOfMassAccumulated = Vector3.zero;
+    private float totalMass = 0f;
 
     private GameObject previewObject;
 
@@ -53,6 +63,10 @@ public class ShipBuilder : MonoBehaviour
 
             TryPlaceSelectedPart();
         }
+        else if (Mouse.current.rightButton.wasPressedThisFrame)
+        {
+            DestroyPreview();
+        }
     }
 
     public void SelectPart(int index)
@@ -66,23 +80,31 @@ public class ShipBuilder : MonoBehaviour
         selectedPart = availableParts[index];
         Debug.Log("Selected part: " + selectedPart.displayName);
 
+        //if (selectedPart.partType == ShipPartType.Hull && hullPlaced)
+        //{
+        //    selectedPart = null;
+        //    return;   
+        //}
         CreatePreview();
         UpdateSnapPointVisibility();
     }
 
     void TryPlaceSelectedPart()
     {
-        if (selectedPart == null)
+        if (selectedPart == null || previewObject == null)
         {
             Debug.Log("No part selected.");
             return;
         }
 
-        TryPlaceAtSnapPoint();
+        //Instantiate(selectedPart.prefab, previewObject.transform.position, previewObject.transform.rotation, shipRoot);
+        TryPlacePart();
     }
 
-    void TryPlaceAtSnapPoint()
+    void TryPlacePart()
     {
+        GameObject obj = null;
+
         if (Camera.main == null || Mouse.current == null)
         {
             return;
@@ -103,9 +125,28 @@ public class ShipBuilder : MonoBehaviour
             snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
         }
 
+        if (snapPoint == null && !hullPlaced && selectedPart.partType != ShipPartType.Hull)
+        {
+            Debug.Log("Hull not yet placed.");
+            return;
+        }
+
+        // Make sure if we are placing a non-hull it is on the hull or some other ship part
+        bool onShipRoot = hit.transform.IsChildOf(shipRoot);
+        if (snapPoint == null && selectedPart.partType != ShipPartType.Hull && !onShipRoot)
+        {
+            Debug.Log("Part placed outside ship root");
+            return;
+        }
+
         if (snapPoint == null)
         {
-            Debug.Log("Clicked object is not a snap point.");
+            //Debug.Log("Clicked object is not a snap point.");
+            obj = Instantiate(selectedPart.prefab,
+                              previewObject.transform.position,
+                              previewObject.transform.rotation,
+                              shipRoot);
+            SetUpPart(obj);
             return;
         }
 
@@ -127,23 +168,42 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        Instantiate(
-            selectedPart.prefab,
-            snapPoint.AttachTransform.position,
-            snapPoint.AttachTransform.rotation,
-            shipRoot
+        obj = Instantiate(selectedPart.prefab,
+                          snapPoint.AttachTransform.position,
+                          snapPoint.AttachTransform.rotation,
+                          shipRoot
         );
+        SetUpPart(obj);
 
         snapPoint.occupied = true;
-
-        if (selectedPart.partType == ShipPartType.Hull)
-        {
-            hullPlaced = true;
-        }
 
         selectedPart = null;
         DestroyPreview();
         UpdateSnapPointVisibility();
+    }
+
+    void SetUpPart(GameObject obj)
+    {
+        if (obj == null)
+        {
+            Debug.Log("Object is null.");
+            return;
+        }
+        ApplyMaterial(obj, selectedPart.material);
+        if (selectedPart.partType == ShipPartType.Hull)
+        {
+            hullPlaced = true;
+            // Disable hull button
+            hullButton.interactable = false;
+            GetHullMeshPoints(previewObject.GetComponentInChildren<MeshFilter>());
+        }
+        Transform trans = obj.transform;
+        // Transform into world space
+        Vector3 worldPoint = trans.TransformPoint(selectedPart.centerOfMass);
+        // Get point with respect to the ship root
+        Vector3 rootPoint = shipRoot.InverseTransformPoint(worldPoint);
+        weightedCenterOfMassAccumulated += selectedPart.mass * trans.TransformPoint(selectedPart.centerOfMass);
+        totalMass += selectedPart.mass;
     }
 
     void CreatePreview()
@@ -171,16 +231,16 @@ public class ShipBuilder : MonoBehaviour
             snapPoint.SetVisible(false);
         }
 
-        ApplyPreviewMaterial(previewObject);
+        ApplyMaterial(previewObject, previewMaterial);
 
         previewObject.SetActive(false);
     }
 
-    void ApplyPreviewMaterial(GameObject target)
+    void ApplyMaterial(GameObject target, Material material)
     {
-        if (previewMaterial == null)
+        if (material == null)
         {
-            Debug.LogWarning("Preview material is not assigned.");
+            Debug.LogWarning("Material is not assigned.");
             return;
         }
 
@@ -188,7 +248,7 @@ public class ShipBuilder : MonoBehaviour
 
         foreach (Renderer renderer in renderers)
         {
-            renderer.material = previewMaterial;
+            renderer.material = material;
         }
     }
 
@@ -219,12 +279,14 @@ public class ShipBuilder : MonoBehaviour
 
         previewObject.SetActive(true);
 
+        Reorient(hit, previewObject);
+
         SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
 
-        if (snapPoint == null)
-        {
-            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
-        }
+        //if (snapPoint == null)
+        //{
+        //    snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
+        //}
 
         if (snapPoint != null &&
             !snapPoint.occupied &&
@@ -253,6 +315,66 @@ public class ShipBuilder : MonoBehaviour
 
             snapPoint.SetVisible(shouldShow);
         }
+    }
+
+    void Reorient(RaycastHit rayHit, GameObject gobj)
+    {
+        Vector3 norm = rayHit.normal.normalized;
+        gobj.transform.up = norm;
+        gobj.transform.rotation = Quaternion.FromToRotation(Vector3.up, norm);
+        //gobj.transform.position = rayHit.point + norm * gobj.transform.localScale.y;
+        gobj.transform.position = rayHit.point;
+    }
+
+    // Get all mesh points on the hull with respect to the hull mesh
+    void GetHullMeshPoints(MeshFilter meshFilter)
+    {
+        Mesh mesh = meshFilter.mesh;
+        Transform meshTransform = meshFilter.transform;
+
+        if (mesh == null || meshFilter.sharedMesh == null)
+        {
+            return;
+        }
+        
+        buoyancy_vertices = meshFilter.sharedMesh.vertices;
+        Vector3[] normals = meshFilter.sharedMesh.normals;
+        List<Vector3> world_points_on_hull = new List<Vector3>();
+
+        // Also get the hull height for buoyancy weight calculations while we're at it
+        for (int i = 0; i < normals.Length; i++)
+        {
+            Vector3 worldNormal = meshTransform.TransformDirection(normals[i]);
+            //if (worldNormal.y < -0.1f)
+            //{
+            Vector3 worldPoint = meshTransform.transform.TransformPoint(buoyancy_vertices[i]);
+            if (!world_points_on_hull.Contains(worldPoint))
+            {
+                world_points_on_hull.Add(worldPoint);
+            }
+            //}
+        }
+        buoyancy_vertices = world_points_on_hull.ToArray();
+        hull_base_point = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.min);
+        float localMaxHeight = meshFilter.sharedMesh.bounds.max.y * meshTransform.localScale.y;
+        hull_local_height = localMaxHeight;
+    }
+
+    // Transform the hull points we got earlier to the root space and set our manual buoyancy points to use these
+    void ApplyHullMeshPoints(WaterBuoyancy buoyancy)
+    {
+        if (buoyancy == null || buoyancy_vertices == null || buoyancy_vertices.Length == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < buoyancy_vertices.Length; i++)
+        {
+            Vector3 rootLocalPoint = buoyancy.transform.InverseTransformPoint(buoyancy_vertices[i]);
+            buoyancy_vertices[i] = rootLocalPoint;
+        }
+        hull_base_point = buoyancy.transform.InverseTransformPoint(hull_base_point);
+        buoyancy.hull_height = hull_local_height;
+        buoyancy.SetManualPoints(buoyancy_vertices, hull_base_point.y);
     }
 
     public void SwitchToSailScene()
@@ -328,15 +450,19 @@ public class ShipBuilder : MonoBehaviour
             rb = shipRoot.gameObject.AddComponent<Rigidbody>();
         }
 
-        rb.centerOfMass = new Vector3(0f, -5f, -0.3f);
+        // TODO: Calulate center of mass based on parts
+
+
+        rb.centerOfMass = weightedCenterOfMassAccumulated / totalMass;
+        rb.mass = totalMass;
 
         if (shipRoot.GetComponent<WaterBuoyancy>() == null)
         {
             WaterBuoyancy buoyancy = shipRoot.gameObject.AddComponent<WaterBuoyancy>();
             buoyancy.waterAngularDrag = 5f;
             buoyancy.objectDensity = 0.25f;
-            buoyancy.zEdgeOffset = -0.3f;
-            buoyancy.hull_height = -2.2f;
+            //buoyancy.zEdgeOffset = -0.3f;
+            ApplyHullMeshPoints(buoyancy);
         }
 
         if (shipRoot.GetComponent<ShipController>() == null)

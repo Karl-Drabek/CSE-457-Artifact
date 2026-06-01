@@ -65,11 +65,6 @@ public class ShipBuildController : MonoBehaviour
             Destroy(moveable.gameObject);
             moveable = null;
         }
-        else if (rightClick.WasReleasedThisFrame() && moveable != null)
-        {
-            moveable.SetDeselected();
-            moveable = null;
-        }
         else if (leftClick.WasPressedThisFrame() && moveable == null)
         {
             RaycastHit RayHit;
