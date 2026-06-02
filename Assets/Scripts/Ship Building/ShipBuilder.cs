@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -21,8 +22,10 @@ public class ShipBuilder : MonoBehaviour
     [SerializeField] private string sailSceneName = "SampleScene";
     [SerializeField] private string builderSceneName = "ShipBuilding";
 
-    [Header("Hull Button")]
+    [Header("UI Elements")]
     [SerializeField] private Button hullButton;
+    [SerializeField] private GameObject selectionPanel;
+    [SerializeField] private GameObject buttPrefab;
 
     private ShipPartDefinition selectedPart;
     private bool hullPlaced = false;
@@ -37,6 +40,11 @@ public class ShipBuilder : MonoBehaviour
     void Start()
     {
         UpdateSnapPointVisibility();
+    }
+    
+    void Awake()
+    {
+        selectionPanel.SetActive(false);
     }
 
     void Update()
@@ -80,11 +88,6 @@ public class ShipBuilder : MonoBehaviour
         selectedPart = availableParts[index];
         Debug.Log("Selected part: " + selectedPart.displayName);
 
-        //if (selectedPart.partType == ShipPartType.Hull && hullPlaced)
-        //{
-        //    selectedPart = null;
-        //    return;   
-        //}
         CreatePreview();
         UpdateSnapPointVisibility();
     }
@@ -97,7 +100,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        //Instantiate(selectedPart.prefab, previewObject.transform.position, previewObject.transform.rotation, shipRoot);
         TryPlacePart();
     }
 
@@ -141,7 +143,6 @@ public class ShipBuilder : MonoBehaviour
 
         if (snapPoint == null)
         {
-            //Debug.Log("Clicked object is not a snap point.");
             obj = Instantiate(selectedPart.prefab,
                               previewObject.transform.position,
                               previewObject.transform.rotation,
@@ -184,19 +185,7 @@ public class ShipBuilder : MonoBehaviour
 
     void SetUpPart(GameObject obj)
     {
-        if (obj == null)
-        {
-            Debug.Log("Object is null.");
-            return;
-        }
         ApplyMaterial(obj, selectedPart.material);
-        if (selectedPart.partType == ShipPartType.Hull)
-        {
-            hullPlaced = true;
-            // Disable hull button
-            hullButton.interactable = false;
-            GetHullMeshPoints(previewObject.GetComponentInChildren<MeshFilter>());
-        }
         Transform trans = obj.transform;
         // Transform into world space
         Vector3 worldPoint = trans.TransformPoint(selectedPart.centerOfMass);
@@ -204,6 +193,19 @@ public class ShipBuilder : MonoBehaviour
         Vector3 rootPoint = shipRoot.InverseTransformPoint(worldPoint);
         weightedCenterOfMassAccumulated += selectedPart.mass * trans.TransformPoint(selectedPart.centerOfMass);
         totalMass += selectedPart.mass;
+
+        // Only allowed to place 1 hull. We should add the ability to change hull.
+        if (selectedPart.partType == ShipPartType.Hull)
+        {
+            hullPlaced = true;
+            // Disable hull button
+            hullButton.interactable = false;
+            selectionPanel.SetActive(false);
+            GetHullMeshPoints(previewObject.GetComponentInChildren<MeshFilter>());
+            Debug.Log(previewObject);
+            DestroyPreview();
+            selectedPart = null;
+        }
     }
 
     void CreatePreview()
@@ -218,11 +220,7 @@ public class ShipBuilder : MonoBehaviour
         previewObject = Instantiate(selectedPart.prefab);
         previewObject.name = selectedPart.displayName + " Preview";
 
-        Collider[] colliders = previewObject.GetComponentsInChildren<Collider>();
-        foreach (Collider collider in colliders)
-        {
-            collider.enabled = false;
-        }
+        IgnoreRaycast(previewObject);
 
         SnapPoint[] snapPoints = previewObject.GetComponentsInChildren<SnapPoint>();
         foreach (SnapPoint snapPoint in snapPoints)
@@ -234,6 +232,16 @@ public class ShipBuilder : MonoBehaviour
         ApplyMaterial(previewObject, previewMaterial);
 
         previewObject.SetActive(false);
+    }
+
+    void IgnoreRaycast(GameObject obj)
+    {
+        obj.layer = 2;
+        Transform[] childTransforms = obj.GetComponentsInChildren<Transform>();
+        foreach (Transform tran in childTransforms)
+        {
+            tran.gameObject.layer = 2;
+        }
     }
 
     void ApplyMaterial(GameObject target, Material material)
@@ -279,8 +287,6 @@ public class ShipBuilder : MonoBehaviour
 
         previewObject.SetActive(true);
 
-        Reorient(hit, previewObject);
-
         SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
 
         //if (snapPoint == null)
@@ -297,8 +303,7 @@ public class ShipBuilder : MonoBehaviour
         }
         else
         {
-            previewObject.transform.position = hit.point;
-            previewObject.transform.rotation = Quaternion.identity;
+            Reorient(hit, previewObject);
         }
     }
 
@@ -377,6 +382,49 @@ public class ShipBuilder : MonoBehaviour
         buoyancy.SetManualPoints(buoyancy_vertices, hull_base_point.y);
     }
 
+    // Unity doesnt support enums passed into on clicks so we need these for the in scene buttons to call
+    public void BuildHullSelectionPanel()
+    {
+        BuildPartSelectionPanel(ShipPartType.Hull);
+    }
+
+    public void BuildMastSelectionPanel()
+    {
+        BuildPartSelectionPanel(ShipPartType.Mast);
+    }
+
+    public void BuildSailSelectionPanel()
+    {
+        BuildPartSelectionPanel(ShipPartType.Sail);
+    }
+
+    // Build out selectable parts of the type associated with the clicked button
+    void BuildPartSelectionPanel(ShipPartType partType)
+    {
+        // Clear existing buttons first
+        foreach (Transform child in selectionPanel.transform)
+        {
+            Destroy(child.gameObject);
+        }
+
+        // Iterate through array of parts and add buttons for each in the selection panel
+        for (int i = 0; i < availableParts.Length; i++)
+        {
+            ShipPartDefinition part = availableParts[i];
+            if (part.partType == partType)
+            {
+                // Create button for part
+                GameObject buttObj = Instantiate(buttPrefab, selectionPanel.transform);
+                Button butt = buttObj.GetComponent<Button>();
+                TextMeshProUGUI buttText = butt.GetComponentInChildren<TextMeshProUGUI>();
+                buttText.text = part.displayName;
+                int index = i;
+                butt.onClick.AddListener(() => SelectPart(index));
+            }
+        }
+        selectionPanel.SetActive(true);
+    }
+
     public void SwitchToSailScene()
     {
         if (!hullPlaced)
@@ -450,9 +498,7 @@ public class ShipBuilder : MonoBehaviour
             rb = shipRoot.gameObject.AddComponent<Rigidbody>();
         }
 
-        // TODO: Calulate center of mass based on parts
-
-
+        // Calulate weighted center of mass based on parts
         rb.centerOfMass = weightedCenterOfMassAccumulated / totalMass;
         rb.mass = totalMass;
 
