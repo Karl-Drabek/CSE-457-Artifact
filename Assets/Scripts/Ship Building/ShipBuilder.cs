@@ -34,6 +34,7 @@ public class ShipBuilder : MonoBehaviour
     private float hull_local_height = 0f;
     private Vector3 weightedCenterOfMassAccumulated = Vector3.zero;
     private float totalMass = 0f;
+    private string VISUAL = "VisualComponent";
 
     private GameObject previewObject;
 
@@ -253,10 +254,13 @@ public class ShipBuilder : MonoBehaviour
         }
 
         Renderer[] renderers = target.GetComponentsInChildren<Renderer>();
-
-        foreach (Renderer renderer in renderers)
+        foreach (Renderer rend in renderers)
         {
-            renderer.material = material;
+            if (rend.CompareTag(VISUAL))
+            {
+                rend.material = material;
+                return;
+            }
         }
     }
 
@@ -507,7 +511,6 @@ public class ShipBuilder : MonoBehaviour
             WaterBuoyancy buoyancy = shipRoot.gameObject.AddComponent<WaterBuoyancy>();
             buoyancy.waterAngularDrag = 5f;
             buoyancy.objectDensity = 0.25f;
-            //buoyancy.zEdgeOffset = -0.3f;
             ApplyHullMeshPoints(buoyancy);
         }
 
