@@ -121,7 +121,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1074538895041829964}
-  - component: {fileID: 3780048852639188465}
+  - component: {fileID: 3241852963195802314}
   m_Layer: 0
   m_Name: Raft
   m_TagString: Untagged
@@ -145,7 +145,7 @@ Transform:
   - {fileID: 6506510178048679665}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &3780048852639188465
+--- !u!114 &3241852963195802314
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -154,7 +154,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 8958473608321063810}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 13e7e2573bc3d1444a39a91aa16046d0, type: 3}
+  m_Script: {fileID: 11500000, guid: fa146d7be24968b4a9bed6dc3bb0ea20, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::ShipPart
-  partType: 0
+  m_EditorClassIdentifier: Assembly-CSharp::BoatPiece
+  parentPiece: {fileID: 0}
+  childPieces: []
+  isRootHull: 0
+  isBroken: 0

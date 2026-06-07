@@ -40,7 +40,6 @@ public class ShipBuilder : MonoBehaviour
 
     void Start()
     {
-        UpdateSnapPointVisibility();
     }
     
     void Awake()
@@ -90,7 +89,6 @@ public class ShipBuilder : MonoBehaviour
         Debug.Log("Selected part: " + selectedPart.displayName);
 
         CreatePreview();
-        UpdateSnapPointVisibility();
     }
 
     void TryPlaceSelectedPart()
@@ -106,7 +104,10 @@ public class ShipBuilder : MonoBehaviour
 
     void TryPlacePart()
     {
-        GameObject obj = null;
+        if (selectedPart == null || previewObject == null)
+        {
+            return;
+        }
 
         if (Camera.main == null || Mouse.current == null)
         {
@@ -121,67 +122,76 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
+        // This is the boat piece the player clicked on.
+        // For example: hull, mast, sail, etc.
+        BoatPiece clickedPiece = hit.collider.GetComponentInParent<BoatPiece>();
 
-        if (snapPoint == null)
+        // -------------------------
+        // Placing the hull
+        // -------------------------
+        if (selectedPart.partType == ShipPartType.Hull)
         {
-            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
+            if (hullPlaced)
+            {
+                Debug.Log("Hull already placed.");
+                return;
+            }
+
+            GameObject hullObj = Instantiate(
+                selectedPart.prefab,
+                previewObject.transform.position,
+                previewObject.transform.rotation,
+                shipRoot
+            );
+
+            BoatPiece hullPiece = hullObj.GetComponent<BoatPiece>();
+
+            if (hullPiece != null)
+            {
+                hullPiece.isRootHull = true;
+            }
+
+            SetUpPart(hullObj);
+            return;
         }
 
-        if (snapPoint == null && !hullPlaced && selectedPart.partType != ShipPartType.Hull)
+        // -------------------------
+        // Placing anything non-hull
+        // -------------------------
+        if (!hullPlaced)
         {
             Debug.Log("Hull not yet placed.");
             return;
         }
 
-        // Make sure if we are placing a non-hull it is on the hull or some other ship part
-        bool onShipRoot = hit.transform.IsChildOf(shipRoot);
-        if (snapPoint == null && selectedPart.partType != ShipPartType.Hull && !onShipRoot)
+        if (clickedPiece == null)
         {
-            Debug.Log("Part placed outside ship root");
+            Debug.Log("Must place this part on an existing boat piece.");
             return;
         }
 
-        if (snapPoint == null)
-        {
-            obj = Instantiate(selectedPart.prefab,
-                              previewObject.transform.position,
-                              previewObject.transform.rotation,
-                              shipRoot);
-            SetUpPart(obj);
-            return;
-        }
-
-        if (snapPoint.occupied)
-        {
-            Debug.Log("Snap point already occupied.");
-            return;
-        }
-
-        if (snapPoint.acceptsPartType != selectedPart.partType)
-        {
-            Debug.Log("This part does not fit this snap point.");
-            return;
-        }
-
-        if (selectedPart.partType == ShipPartType.Hull && hullPlaced)
-        {
-            Debug.Log("Hull already placed.");
-            return;
-        }
-
-        obj = Instantiate(selectedPart.prefab,
-                          snapPoint.AttachTransform.position,
-                          snapPoint.AttachTransform.rotation,
-                          shipRoot
+        GameObject obj = Instantiate(
+            selectedPart.prefab,
+            previewObject.transform.position,
+            previewObject.transform.rotation,
+            shipRoot
         );
-        SetUpPart(obj);
 
-        snapPoint.occupied = true;
+        BoatPiece newPiece = obj.GetComponent<BoatPiece>();
+
+        if (newPiece != null)
+        {
+            newPiece.AttachTo(clickedPiece);
+        }
+        else
+        {
+            Debug.LogWarning("Placed part does not have a BoatPiece component.");
+        }
+
+        SetUpPart(obj);
 
         selectedPart = null;
         DestroyPreview();
-        UpdateSnapPointVisibility();
     }
 
     void SetUpPart(GameObject obj)
@@ -192,7 +202,7 @@ public class ShipBuilder : MonoBehaviour
         Vector3 worldPoint = trans.TransformPoint(selectedPart.centerOfMass);
         // Get point with respect to the ship root
         Vector3 rootPoint = shipRoot.InverseTransformPoint(worldPoint);
-        weightedCenterOfMassAccumulated += selectedPart.mass * trans.TransformPoint(selectedPart.centerOfMass);
+        weightedCenterOfMassAccumulated += selectedPart.mass * rootPoint;
         totalMass += selectedPart.mass;
 
         // Only allowed to place 1 hull. We should add the ability to change hull.
@@ -222,14 +232,6 @@ public class ShipBuilder : MonoBehaviour
         previewObject.name = selectedPart.displayName + " Preview";
 
         IgnoreRaycast(previewObject);
-
-        SnapPoint[] snapPoints = previewObject.GetComponentsInChildren<SnapPoint>();
-        foreach (SnapPoint snapPoint in snapPoints)
-        {
-            snapPoint.enabled = false;
-            snapPoint.SetVisible(false);
-        }
-
         ApplyMaterial(previewObject, previewMaterial);
 
         previewObject.SetActive(false);
@@ -290,40 +292,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         previewObject.SetActive(true);
-
-        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
-
-        //if (snapPoint == null)
-        //{
-        //    snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
-        //}
-
-        if (snapPoint != null &&
-            !snapPoint.occupied &&
-            snapPoint.acceptsPartType == selectedPart.partType)
-        {
-            previewObject.transform.position = snapPoint.AttachTransform.position;
-            previewObject.transform.rotation = snapPoint.AttachTransform.rotation;
-        }
-        else
-        {
-            Reorient(hit, previewObject);
-        }
-    }
-
-    void UpdateSnapPointVisibility()
-    {
-        SnapPoint[] snapPoints = FindObjectsByType<SnapPoint>(FindObjectsSortMode.None);
-
-        foreach (SnapPoint snapPoint in snapPoints)
-        {
-            bool shouldShow =
-                selectedPart != null &&
-                !snapPoint.occupied &&
-                snapPoint.acceptsPartType == selectedPart.partType;
-
-            snapPoint.SetVisible(shouldShow);
-        }
+        Reorient(hit, previewObject);
     }
 
     void Reorient(RaycastHit rayHit, GameObject gobj)
@@ -464,7 +433,6 @@ public class ShipBuilder : MonoBehaviour
 
         selectedPart = null;
         DestroyPreview();
-        UpdateSnapPointVisibility();
 
         SceneManager.SetActiveScene(loadedScene);
 
