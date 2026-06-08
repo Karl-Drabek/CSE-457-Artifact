@@ -472,6 +472,7 @@ GameObject:
   - component: {fileID: 792356278}
   - component: {fileID: 792356276}
   - component: {fileID: 792356275}
+  - component: {fileID: 792356279}
   m_Layer: 0
   m_Name: Water
   m_TagString: Untagged
@@ -601,7 +602,27 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 792356274}
-  m_Mesh: {fileID: 1703864026}
+  m_Mesh: {fileID: 1487413543}
+--- !u!114 &792356279
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 792356274}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ae7a6f147e2129b43b68707293ced610, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WaveDamage
+  water: {fileID: 0}
+  damagePerSecond: 3
+  damageDepthThreshold: 0.05
+  depthDamageMultiplier: 1.5
+  minImpactSpeed: 1.5
+  impactDamageMultiplier: 2.5
+  useNormalImpactOnly: 1
+  damageBrokenPieces: 0
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -1373,103 +1394,13 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1440400414}
   m_CullTransparentMesh: 1
---- !u!1 &1503298131
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1503298133}
-  - component: {fileID: 1503298132}
-  - component: {fileID: 1503298134}
-  m_Layer: 0
-  m_Name: World
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1503298132
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1503298131}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1e1e4e253c022fc47aa3478bc45a4281, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::World
-  resolution: 50
-  groundSize: {x: 100, y: 100}
-  groundHeight: -10
-  groundMaterial: {fileID: 2100000, guid: 8f0d7ac3c32d41b7bff0543f3a5d930e, type: 2}
-  renderWater: 1
-  waterSize: {x: 100, y: 100}
-  waterHeight: 0
-  waterMaterial: {fileID: 2100000, guid: 9e03fa7a792c4d73b7217b4b4f7d17d6, type: 2}
-  groundFilter: {fileID: 1104478578}
-  groundSurface: {fileID: 1104478582}
-  waterFilter: {fileID: 792356278}
-  waterSurface: {fileID: 792356275}
---- !u!4 &1503298133
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1503298131}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children:
-  - {fileID: 1104478580}
-  - {fileID: 792356277}
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1503298134
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1503298131}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 2bbf0c9544d84d09bcbfc1c2f2a1b6f1, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::WindField
-  baseWindVelocity: {x: 0.5, y: 0, z: 0.5}
-  vortices: []
-  currents: []
-  fadeFromWaterline: 1
-  fullStrengthHeight: 1
-  showWindParticles: 1
-  particleAreaCenterOffset: {x: 0, y: 0, z: 0}
-  particleAreaSize: {x: 100, y: 100, z: 100}
-  particleMinHeightAboveWater: 1
-  particleMaxHeightAboveWater: 10
-  particleCount: 96
-  particleLifetime: 1
-  particleSize: 0.2
-  particleSpeedScale: 10
-  particleResponsiveness: 1
-  particleJitter: 5
-  particleVerticalDrift: -0.02
-  particleColor: {r: 1, g: 1, b: 1, a: 0.14}
-  windParticleSystem: {fileID: 0}
---- !u!43 &1703864026
+--- !u!43 &1487413543
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: Generated Water Source URP Low Poly
+  m_Name: Generated Water Source URP Low Poly URP Low Poly
   serializedVersion: 12
   m_SubMeshes:
   - serializedVersion: 2
@@ -1641,6 +1572,96 @@ Mesh:
       - serializedVersion: 1
         m_IndexStart: 0
         m_IndexCount: 0
+--- !u!1 &1503298131
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1503298133}
+  - component: {fileID: 1503298132}
+  - component: {fileID: 1503298134}
+  m_Layer: 0
+  m_Name: World
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1503298132
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1503298131}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1e1e4e253c022fc47aa3478bc45a4281, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::World
+  resolution: 50
+  groundSize: {x: 100, y: 100}
+  groundHeight: -10
+  groundMaterial: {fileID: 2100000, guid: 8f0d7ac3c32d41b7bff0543f3a5d930e, type: 2}
+  renderWater: 1
+  waterSize: {x: 100, y: 100}
+  waterHeight: 0
+  waterMaterial: {fileID: 2100000, guid: 9e03fa7a792c4d73b7217b4b4f7d17d6, type: 2}
+  groundFilter: {fileID: 1104478578}
+  groundSurface: {fileID: 1104478582}
+  waterFilter: {fileID: 792356278}
+  waterSurface: {fileID: 792356275}
+--- !u!4 &1503298133
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1503298131}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1104478580}
+  - {fileID: 792356277}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1503298134
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1503298131}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2bbf0c9544d84d09bcbfc1c2f2a1b6f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WindField
+  baseWindVelocity: {x: 0.5, y: 0, z: 0.5}
+  vortices: []
+  currents: []
+  fadeFromWaterline: 1
+  fullStrengthHeight: 1
+  showWindParticles: 1
+  particleAreaCenterOffset: {x: 0, y: 0, z: 0}
+  particleAreaSize: {x: 100, y: 100, z: 100}
+  particleMinHeightAboveWater: 1
+  particleMaxHeightAboveWater: 10
+  particleCount: 96
+  particleLifetime: 1
+  particleSize: 0.2
+  particleSpeedScale: 10
+  particleResponsiveness: 1
+  particleJitter: 5
+  particleVerticalDrift: -0.02
+  particleColor: {r: 1, g: 1, b: 1, a: 0.14}
+  windParticleSystem: {fileID: 0}
 --- !u!1001 &1847678685
 PrefabInstance:
   m_ObjectHideFlags: 0
