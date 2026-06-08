@@ -197,6 +197,15 @@ public class ShipBuilder : MonoBehaviour
     void SetUpPart(GameObject obj)
     {
         ApplyMaterial(obj, selectedPart.material);
+
+        BoatPiece piece = obj.GetComponent<BoatPiece>();
+
+        if (piece != null)
+        {
+            piece.pieceMass = selectedPart.mass;
+            piece.localCenterOfMass = selectedPart.centerOfMass;
+        }
+
         Transform trans = obj.transform;
         // Transform into world space
         Vector3 worldPoint = trans.TransformPoint(selectedPart.centerOfMass);
@@ -232,15 +241,45 @@ public class ShipBuilder : MonoBehaviour
         previewObject.name = selectedPart.displayName + " Preview";
 
         IgnoreRaycast(previewObject);
+        DisablePreviewPhysics(previewObject);
         ApplyMaterial(previewObject, previewMaterial);
 
         previewObject.SetActive(false);
     }
 
+    void DisablePreviewPhysics(GameObject obj)
+    {
+        if (obj == null)
+        {
+            return;
+        }
+
+        Collider[] colliders = obj.GetComponentsInChildren<Collider>();
+
+        foreach (Collider col in colliders)
+        {
+            col.enabled = false;
+        }
+
+        Rigidbody[] rigidbodies = obj.GetComponentsInChildren<Rigidbody>();
+
+        foreach (Rigidbody rb in rigidbodies)
+        {
+            rb.isKinematic = true;
+            rb.detectCollisions = false;
+        }
+    }
     void IgnoreRaycast(GameObject obj)
     {
+        if (obj == null)
+        {
+            return;
+        }
+
         obj.layer = 2;
+
         Transform[] childTransforms = obj.GetComponentsInChildren<Transform>();
+
         foreach (Transform tran in childTransforms)
         {
             tran.gameObject.layer = 2;
@@ -470,9 +509,19 @@ public class ShipBuilder : MonoBehaviour
             rb = shipRoot.gameObject.AddComponent<Rigidbody>();
         }
 
-        // Calulate weighted center of mass based on parts
-        rb.centerOfMass = weightedCenterOfMassAccumulated / totalMass;
-        rb.mass = totalMass;
+        rb.isKinematic = false;
+        rb.useGravity = true;
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+
+        BoatMassManager massManager = shipRoot.GetComponent<BoatMassManager>();
+
+        if (massManager == null)
+        {
+            massManager = shipRoot.gameObject.AddComponent<BoatMassManager>();
+        }
+
+        massManager.RecalculateMass();
 
         if (shipRoot.GetComponent<WaterBuoyancy>() == null)
         {

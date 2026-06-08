@@ -21,6 +21,10 @@ public class BoatPiece : MonoBehaviour
     [Header("Cleanup")]
     public float destroyAfterBreakingSeconds = 3f;
 
+    [Header("Mass")]
+    public float pieceMass = 1f;
+    public Vector3 localCenterOfMass = Vector3.zero;
+
     private void Awake()
     {
         currentDurability = maxDurability;
@@ -82,10 +86,10 @@ public class BoatPiece : MonoBehaviour
 
         isBroken = true;
 
-        // Copy children so the list can safely change while looping
+        BoatMassManager massManager = GetComponentInParent<BoatMassManager>();
+
         List<BoatPiece> childrenCopy = new List<BoatPiece>(childPieces);
 
-        // Anything attached to this piece also breaks off
         foreach (BoatPiece child in childrenCopy)
         {
             child.BreakOff();
@@ -93,17 +97,19 @@ public class BoatPiece : MonoBehaviour
 
         childPieces.Clear();
 
-        // Remove this piece from its parent
         if (parentPiece != null)
         {
             parentPiece.childPieces.Remove(this);
             parentPiece = null;
         }
 
-        // Detach from boat hierarchy
         transform.SetParent(null, true);
 
-        // Add physics so it becomes a loose broken piece
+        if (massManager != null)
+        {
+            massManager.RecalculateMass();
+        }
+
         Rigidbody rb = GetComponent<Rigidbody>();
 
         if (rb == null)
@@ -114,12 +120,10 @@ public class BoatPiece : MonoBehaviour
         rb.isKinematic = false;
         rb.useGravity = true;
 
-        // Optional little push so the break is visible
         rb.AddForce(Random.insideUnitSphere * breakForce, ForceMode.Impulse);
 
         Debug.Log(gameObject.name + " broke off.");
 
-        // Remove broken piece after a few seconds
         Destroy(gameObject, destroyAfterBreakingSeconds);
     }
 }
