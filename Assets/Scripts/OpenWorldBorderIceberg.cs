@@ -1,24 +1,27 @@
 using UnityEngine;
 
+/// <summary>
+/// Simple collision bridge that tells World when the boat touches the generated border wall.
+/// </summary>
 public class OpenWorldBorderIceberg : MonoBehaviour
 {
     void OnCollisionEnter(Collision collision)
     {
-        if (OpenWorldManager.Instance == null)
+        if (World.Instance == null)
         {
             return;
         }
 
-        OpenWorldManager.Instance.HandleBorderCollision(gameObject, collision.transform);
+        World.Instance.HandleBorderCollision(gameObject, collision.transform);
     }
 
     void OnTriggerEnter(Collider other)
     {
-        if (OpenWorldManager.Instance == null)
+        if (World.Instance == null)
         {
             return;
         }
 
-        OpenWorldManager.Instance.HandleBorderCollision(gameObject, other.transform);
+        World.Instance.HandleBorderCollision(gameObject, other.transform);
     }
 }

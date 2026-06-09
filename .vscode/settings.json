@@ -67,5 +67,5 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "Artifact.slnx"
+    "dotnet.defaultSolution": "CSE 457 Artifact.slnx"
 }

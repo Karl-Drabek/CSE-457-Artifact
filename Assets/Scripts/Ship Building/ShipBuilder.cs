@@ -4,25 +4,29 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
+/// <summary>
+/// Main ship-building controller used by the ShipBuilding scene.
+/// It handles part selection, preview placement, snap-point placement,
+/// and moving the finished boat into the sail scene.
+/// </summary>
 public class ShipBuilder : MonoBehaviour
 {
     [Header("Available Parts")]
-    [SerializeField] private ShipPartDefinition[] availableParts;
+    [SerializeField] ShipPartDefinition[] availableParts;
 
     [Header("Scene References")]
-    [SerializeField] private Transform shipRoot;
+    [SerializeField] Transform shipRoot;
 
     [Header("Preview")]
-    [SerializeField] private Material previewMaterial;
+    [SerializeField] Material previewMaterial;
 
     [Header("Scene Transfer")]
-    [SerializeField] private string sailSceneName = "SampleScene";
-    [SerializeField] private string builderSceneName = "ShipBuilding";
+    [SerializeField] string sailSceneName = "SampleScene";
+    [SerializeField] string builderSceneName = "ShipBuilding";
 
-    private ShipPartDefinition selectedPart;
-    private bool hullPlaced = false;
-
-    private GameObject previewObject;
+    ShipPartDefinition selectedPart;
+    GameObject previewObject;
+    bool hullPlaced;
 
     void Start()
     {
@@ -36,94 +40,71 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        bool pointerOverUI = EventSystem.current != null &&
-                             EventSystem.current.IsPointerOverGameObject();
-
-        if (!pointerOverUI)
+        bool pointerOverUi = IsPointerOverUi();
+        if (!pointerOverUi)
         {
             UpdatePreviewPosition();
         }
 
-        if (Mouse.current.leftButton.wasPressedThisFrame)
+        if (!Mouse.current.leftButton.wasPressedThisFrame || pointerOverUi)
         {
-            if (pointerOverUI)
-            {
-                return;
-            }
-
-            TryPlaceSelectedPart();
+            return;
         }
+
+        TryPlaceSelectedPart();
     }
 
+    /// <summary>
+    /// Called by the part-selection UI.
+    /// </summary>
     public void SelectPart(int index)
     {
         if (index < 0 || index >= availableParts.Length)
         {
-            Debug.LogWarning("Invalid part index selected.");
+            Debug.LogWarning("Invalid part index selected.", this);
             return;
         }
 
         selectedPart = availableParts[index];
-        Debug.Log("Selected part: " + selectedPart.displayName);
-
         CreatePreview();
         UpdateSnapPointVisibility();
+    }
+
+    /// <summary>
+    /// Called by the Save Ship button in the builder scene.
+    /// The method name is kept for the existing scene button hookup.
+    /// </summary>
+    public void SwitchToSailScene()
+    {
+        if (!hullPlaced)
+        {
+            Debug.Log("Cannot save ship yet because no hull has been placed.", this);
+            return;
+        }
+
+        StartCoroutine(LoadSailSceneAndTransferBoat());
     }
 
     void TryPlaceSelectedPart()
     {
         if (selectedPart == null)
         {
-            Debug.Log("No part selected.");
             return;
         }
 
-        TryPlaceAtSnapPoint();
-    }
-
-    void TryPlaceAtSnapPoint()
-    {
-        if (Camera.main == null || Mouse.current == null)
+        if (!TryGetHoveredSnapPoint(out SnapPoint snapPoint))
         {
             return;
         }
 
-        Vector2 mousePosition = Mouse.current.position.ReadValue();
-        Ray ray = Camera.main.ScreenPointToRay(mousePosition);
-
-        if (!Physics.Raycast(ray, out RaycastHit hit))
+        if (snapPoint.occupied || snapPoint.acceptsPartType != selectedPart.partType)
         {
-            return;
-        }
-
-        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
-
-        if (snapPoint == null)
-        {
-            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
-        }
-
-        if (snapPoint == null)
-        {
-            Debug.Log("Clicked object is not a snap point.");
-            return;
-        }
-
-        if (snapPoint.occupied)
-        {
-            Debug.Log("Snap point already occupied.");
-            return;
-        }
-
-        if (snapPoint.acceptsPartType != selectedPart.partType)
-        {
-            Debug.Log("This part does not fit this snap point.");
             return;
         }
 
         if (selectedPart.partType == ShipPartType.Hull && hullPlaced)
         {
-            Debug.Log("Hull already placed.");
+            Debug.Log("A hull has already been placed.", this);
             return;
         }
 
@@ -131,8 +112,7 @@ public class ShipBuilder : MonoBehaviour
             selectedPart.prefab,
             snapPoint.AttachTransform.position,
             snapPoint.AttachTransform.rotation,
-            shipRoot
-        );
+            shipRoot);
 
         snapPoint.occupied = true;
 
@@ -144,6 +124,30 @@ public class ShipBuilder : MonoBehaviour
         selectedPart = null;
         DestroyPreview();
         UpdateSnapPointVisibility();
+    }
+
+    bool TryGetHoveredSnapPoint(out SnapPoint snapPoint)
+    {
+        snapPoint = null;
+
+        if (Camera.main == null || Mouse.current == null)
+        {
+            return false;
+        }
+
+        Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
+        if (!Physics.Raycast(ray, out RaycastHit hit))
+        {
+            return false;
+        }
+
+        snapPoint = hit.collider.GetComponent<SnapPoint>();
+        if (snapPoint == null)
+        {
+            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
+        }
+
+        return snapPoint != null;
     }
 
     void CreatePreview()
@@ -158,35 +162,29 @@ public class ShipBuilder : MonoBehaviour
         previewObject = Instantiate(selectedPart.prefab);
         previewObject.name = selectedPart.displayName + " Preview";
 
-        Collider[] colliders = previewObject.GetComponentsInChildren<Collider>();
-        foreach (Collider collider in colliders)
+        foreach (Collider collider in previewObject.GetComponentsInChildren<Collider>())
         {
             collider.enabled = false;
         }
 
-        SnapPoint[] snapPoints = previewObject.GetComponentsInChildren<SnapPoint>();
-        foreach (SnapPoint snapPoint in snapPoints)
+        foreach (SnapPoint snapPoint in previewObject.GetComponentsInChildren<SnapPoint>())
         {
             snapPoint.enabled = false;
             snapPoint.SetVisible(false);
         }
 
         ApplyPreviewMaterial(previewObject);
-
         previewObject.SetActive(false);
     }
 
     void ApplyPreviewMaterial(GameObject target)
     {
-        if (previewMaterial == null)
+        if (previewMaterial == null || target == null)
         {
-            Debug.LogWarning("Preview material is not assigned.");
             return;
         }
 
-        Renderer[] renderers = target.GetComponentsInChildren<Renderer>();
-
-        foreach (Renderer renderer in renderers)
+        foreach (Renderer renderer in target.GetComponentsInChildren<Renderer>())
         {
             renderer.material = previewMaterial;
         }
@@ -208,9 +206,7 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        Vector2 mousePosition = Mouse.current.position.ReadValue();
-        Ray ray = Camera.main.ScreenPointToRay(mousePosition);
-
+        Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
         if (!Physics.Raycast(ray, out RaycastHit hit))
         {
             previewObject.SetActive(false);
@@ -219,68 +215,43 @@ public class ShipBuilder : MonoBehaviour
 
         previewObject.SetActive(true);
 
-        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>();
-
-        if (snapPoint == null)
-        {
-            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
-        }
-
-        if (snapPoint != null &&
-            !snapPoint.occupied &&
-            snapPoint.acceptsPartType == selectedPart.partType)
+        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>() ?? hit.collider.GetComponentInParent<SnapPoint>();
+        if (snapPoint != null && !snapPoint.occupied && snapPoint.acceptsPartType == selectedPart.partType)
         {
             previewObject.transform.position = snapPoint.AttachTransform.position;
             previewObject.transform.rotation = snapPoint.AttachTransform.rotation;
+            return;
         }
-        else
-        {
-            previewObject.transform.position = hit.point;
-            previewObject.transform.rotation = Quaternion.identity;
-        }
+
+        previewObject.transform.position = hit.point;
+        previewObject.transform.rotation = Quaternion.identity;
     }
 
     void UpdateSnapPointVisibility()
     {
         SnapPoint[] snapPoints = FindObjectsByType<SnapPoint>(FindObjectsSortMode.None);
-
         foreach (SnapPoint snapPoint in snapPoints)
         {
-            bool shouldShow =
-                selectedPart != null &&
-                !snapPoint.occupied &&
-                snapPoint.acceptsPartType == selectedPart.partType;
-
+            bool shouldShow = selectedPart != null
+                && !snapPoint.occupied
+                && snapPoint.acceptsPartType == selectedPart.partType;
             snapPoint.SetVisible(shouldShow);
         }
     }
 
-    public void SwitchToSailScene()
+    IEnumerator LoadSailSceneAndTransferBoat()
     {
-        if (!hullPlaced)
+        AsyncOperation operation = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
+        yield return operation;
+
+        Scene sailScene = SceneManager.GetSceneByName(sailSceneName);
+        if (!sailScene.isLoaded)
         {
-            Debug.Log("Cannot switch scenes: no hull has been placed.");
-            return;
-        }
-
-        StartCoroutine(LoadAndActivateSailScene());
-    }
-
-    IEnumerator LoadAndActivateSailScene()
-    {
-        AsyncOperation op = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
-
-        yield return op;
-
-        Scene loadedScene = SceneManager.GetSceneByName(sailSceneName);
-
-        if (!loadedScene.isLoaded)
-        {
-            Debug.LogWarning("Sail scene did not load: " + sailSceneName);
+            Debug.LogWarning("Sail scene did not load: " + sailSceneName, this);
             yield break;
         }
 
-        MoveBoatToSailScene(loadedScene);
+        MoveBoatToSailScene(sailScene);
 
         Camera builderCamera = Camera.main;
         if (builderCamera != null)
@@ -292,16 +263,12 @@ public class ShipBuilder : MonoBehaviour
         DestroyPreview();
         UpdateSnapPointVisibility();
 
-        SceneManager.SetActiveScene(loadedScene);
+        SceneManager.SetActiveScene(sailScene);
 
-        BoatFollowCamera boatFollowCamera = FindAnyObjectByType<BoatFollowCamera>();
-        if (boatFollowCamera != null)
+        BoatFollowCamera followCamera = FindAnyObjectByType<BoatFollowCamera>();
+        if (followCamera != null)
         {
-            boatFollowCamera.target = shipRoot;
-        }
-        else
-        {
-            Debug.LogWarning("BoatFollowCamera not found in sail scene.");
+            followCamera.target = shipRoot;
         }
 
         yield return SceneManager.UnloadSceneAsync(builderSceneName);
@@ -315,20 +282,20 @@ public class ShipBuilder : MonoBehaviour
         }
 
         PrepareBoatForSailing();
-
         SceneManager.MoveGameObjectToScene(shipRoot.gameObject, targetScene);
     }
 
+    // Adds the runtime components the sailing scene expects. This only happens
+    // when the player saves the builder result into the main scene.
     void PrepareBoatForSailing()
     {
-        Rigidbody rb = shipRoot.GetComponent<Rigidbody>();
-
-        if (rb == null)
+        Rigidbody body = shipRoot.GetComponent<Rigidbody>();
+        if (body == null)
         {
-            rb = shipRoot.gameObject.AddComponent<Rigidbody>();
+            body = shipRoot.gameObject.AddComponent<Rigidbody>();
         }
 
-        rb.centerOfMass = new Vector3(0f, -5f, -0.3f);
+        body.centerOfMass = new Vector3(0f, -5f, -0.3f);
 
         if (shipRoot.GetComponent<WaterBuoyancy>() == null)
         {
@@ -343,5 +310,10 @@ public class ShipBuilder : MonoBehaviour
         {
             shipRoot.gameObject.AddComponent<ShipController>();
         }
+    }
+
+    static bool IsPointerOverUi()
+    {
+        return EventSystem.current != null && EventSystem.current.IsPointerOverGameObject();
     }
 }

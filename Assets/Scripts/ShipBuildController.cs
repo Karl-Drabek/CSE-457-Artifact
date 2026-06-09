@@ -1,38 +1,25 @@
-using UnityEngine;
 using System.Collections;
-using System.Collections.Generic;
+using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
-
+/// <summary>
+/// Older builder-test controller kept for BuilderTest.unity and MoveableObject.
+/// The main ship-building scene uses ShipBuilder instead.
+/// </summary>
 public class ShipBuildController : MonoBehaviour
 {
-    [SerializeField]
-    private GameObject obj;
+    const int SailSceneBuildIndex = 0;
 
-    [SerializeField]
-    private GameObject shipParent;
+    [SerializeField] GameObject obj;
+    [SerializeField] GameObject shipParent;
 
-    const int SAIL_SCENE_INDEX = 0;
+    Camera mainCamera;
+    InputAction leftClick;
+    InputAction rightClick;
+    MoveableObject moveable;
 
-    private Camera mainCamera;
-    public static ShipBuildController Instance;
-
-    private InputAction leftClick;
-    private InputAction rightClick;
-    private InputAction middleMouse;
-
-
-    private MoveableObject moveable = null;
-
-
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
-    {
-        leftClick = InputSystem.actions.FindAction("Click");
-        rightClick = InputSystem.actions.FindAction("RightClick");
-        middleMouse = InputSystem.actions.FindAction("MiddleClick");
-    }
+    public static ShipBuildController Instance { get; private set; }
 
     void Awake()
     {
@@ -40,125 +27,182 @@ public class ShipBuildController : MonoBehaviour
         Instance = this;
     }
 
-    // Update is called once per frame
+    void Start()
+    {
+        leftClick = InputSystem.actions.FindAction("Click");
+        rightClick = InputSystem.actions.FindAction("RightClick");
+    }
+
     void Update()
     {
-        if (mainCamera == null || obj == null)
+        if (mainCamera == null || obj == null || leftClick == null || rightClick == null)
         {
             return;
         }
+
         if (rightClick.WasPressedThisFrame() && moveable == null)
         {
-            RaycastHit RayHit;
-            if (CameraToMouseRay(out RayHit))
-            {
-                GameObject targetHit = RayHit.transform.gameObject;
-
-                if (targetHit.tag != "Moveable") { return; }
-
-                moveable = targetHit.GetComponent<MoveableObject>();
-                moveable.SetSelected();
-            }
+            TrySelectMoveable();
+            return;
         }
-        else if (rightClick.WasPressedThisFrame() && moveable != null) 
+
+        if (rightClick.WasPressedThisFrame() && moveable != null)
         {
             Destroy(moveable.gameObject);
             moveable = null;
+            return;
         }
-        else if (rightClick.WasReleasedThisFrame() && moveable != null)
+
+        if (rightClick.WasReleasedThisFrame() && moveable != null)
         {
             moveable.SetDeselected();
             moveable = null;
+            return;
         }
-        else if (leftClick.WasPressedThisFrame() && moveable == null)
+
+        if (leftClick.WasPressedThisFrame() && moveable == null)
         {
-            RaycastHit RayHit;
-            if (CameraToMouseRay(out RayHit))
-            {
-                GameObject target = RayHit.transform.gameObject;
-                Vector3 pos = RayHit.point;
-                GameObject new_object;
-                if (target != null)
-                {
-                    pos = pos + Vector3.up * target.transform.localScale.y;
-                    new_object = Instantiate(obj, pos, Quaternion.identity, shipParent.transform);
-                    moveable = new_object.GetComponent<MoveableObject>();
-                    moveable.SetSelected();
-                }
-            }
+            TryCreateMoveable();
+            return;
         }
-        else if (leftClick.WasPressedThisFrame() && moveable != null)
+
+        if (leftClick.WasPressedThisFrame() && moveable != null)
         {
-            Instantiate(obj, moveable.GetPosition(), moveable.gameObject.transform.rotation, shipParent.transform);
+            Instantiate(obj, moveable.GetPosition(), moveable.transform.rotation, shipParent.transform);
         }
     }
 
-    public static bool CameraToMouseRay(out RaycastHit RayHit)
+    public static bool CameraToMouseRay(out RaycastHit rayHit)
     {
+        rayHit = default;
+        if (Instance == null || Instance.mainCamera == null || Mouse.current == null)
+        {
+            return false;
+        }
+
         Ray ray = Instance.mainCamera.ScreenPointToRay(Mouse.current.position.ReadValue());
-        return Physics.Raycast(ray, out RayHit);
+        return Physics.Raycast(ray, out rayHit);
     }
 
+    /// <summary>
+    /// Existing button hook used by BuilderTest. Saves the current boat and
+    /// moves it into the sail scene.
+    /// </summary>
     public void SwitchToSailScene()
     {
-        StartCoroutine(LoadAndActivate(SAIL_SCENE_INDEX));
+        StartCoroutine(LoadAndActivateSailScene());
     }
 
-    IEnumerator LoadAndActivate(int index)
+    IEnumerator LoadAndActivateSailScene()
     {
-        AsyncOperation op = SceneManager.LoadSceneAsync(index, LoadSceneMode.Additive);
+        AsyncOperation operation = SceneManager.LoadSceneAsync(SailSceneBuildIndex, LoadSceneMode.Additive);
+        yield return operation;
 
-        yield return op;
-
-        Scene loadedScene = SceneManager.GetSceneByBuildIndex(index);
-
-        if (loadedScene.isLoaded)
+        Scene sailScene = SceneManager.GetSceneByBuildIndex(SailSceneBuildIndex);
+        if (!sailScene.isLoaded)
         {
-            MoveBoatToScene();
-
-            // Do this so we dont have 2 audio outputs at the same time
-            mainCamera.gameObject.SetActive(false);
-
-            if (moveable != null)
-            {
-                moveable.Delete();
-                moveable = null;
-            }
-
-            SceneManager.SetActiveScene(loadedScene);
-
-            BoatFollowCamera bfc = FindAnyObjectByType<BoatFollowCamera>();
-            bfc.target = shipParent.transform;
-           
-
-            // Unload the original scene after moving the boat out of it
-            yield return SceneManager.UnloadSceneAsync(1);
+            yield break;
         }
+
+        MoveBoatToScene();
+
+        if (mainCamera != null)
+        {
+            mainCamera.gameObject.SetActive(false);
+        }
+
+        if (moveable != null)
+        {
+            moveable.Delete();
+            moveable = null;
+        }
+
+        SceneManager.SetActiveScene(sailScene);
+
+        BoatFollowCamera followCamera = FindAnyObjectByType<BoatFollowCamera>();
+        if (followCamera != null)
+        {
+            followCamera.target = shipParent.transform;
+        }
+
+        yield return SceneManager.UnloadSceneAsync(1);
     }
 
     public void MoveBoatToScene()
     {
-        Scene targetScene = SceneManager.GetSceneByBuildIndex(SAIL_SCENE_INDEX);
+        Scene sailScene = SceneManager.GetSceneByBuildIndex(SailSceneBuildIndex);
         if (shipParent.transform.parent != null)
         {
             shipParent.transform.SetParent(null);
         }
+
         AddBuoyancyToShip();
         AddShipMovement();
         SetShipPhysics();
-        SceneManager.MoveGameObjectToScene(shipParent, targetScene);
 
+        SceneManager.MoveGameObjectToScene(shipParent, sailScene);
+    }
+
+    void TrySelectMoveable()
+    {
+        if (!CameraToMouseRay(out RaycastHit rayHit))
+        {
+            return;
+        }
+
+        if (!rayHit.transform.CompareTag("Moveable"))
+        {
+            return;
+        }
+
+        moveable = rayHit.transform.GetComponent<MoveableObject>();
+        if (moveable != null)
+        {
+            moveable.SetSelected();
+        }
+    }
+
+    void TryCreateMoveable()
+    {
+        if (!CameraToMouseRay(out RaycastHit rayHit))
+        {
+            return;
+        }
+
+        GameObject target = rayHit.transform.gameObject;
+        if (target == null)
+        {
+            return;
+        }
+
+        Vector3 spawnPosition = rayHit.point + (Vector3.up * target.transform.localScale.y);
+        GameObject newObject = Instantiate(obj, spawnPosition, Quaternion.identity, shipParent.transform);
+        moveable = newObject.GetComponent<MoveableObject>();
+        if (moveable != null)
+        {
+            moveable.SetSelected();
+        }
     }
 
     void SetShipPhysics()
     {
-        Rigidbody rigid = shipParent.GetComponent<Rigidbody>();
-        rigid.centerOfMass = new Vector3(0f, -5f, -0.3f);
+        Rigidbody rigidbody = shipParent.GetComponent<Rigidbody>();
+        if (rigidbody == null)
+        {
+            rigidbody = shipParent.AddComponent<Rigidbody>();
+        }
+
+        rigidbody.centerOfMass = new Vector3(0f, -5f, -0.3f);
     }
 
     void AddBuoyancyToShip()
     {
-        WaterBuoyancy buoyancy = shipParent.AddComponent<WaterBuoyancy>();
+        WaterBuoyancy buoyancy = shipParent.GetComponent<WaterBuoyancy>();
+        if (buoyancy == null)
+        {
+            buoyancy = shipParent.AddComponent<WaterBuoyancy>();
+        }
+
         buoyancy.waterAngularDrag = 5f;
         buoyancy.objectDensity = 0.25f;
         buoyancy.zEdgeOffset = -0.3f;
@@ -167,11 +211,13 @@ public class ShipBuildController : MonoBehaviour
 
     void AddShipMovement()
     {
-        ShipController controller = shipParent.AddComponent<ShipController>();
+        if (shipParent.GetComponent<ShipController>() == null)
+        {
+            shipParent.AddComponent<ShipController>();
+        }
     }
 
-
-    // For URP Lit shader, other shaders will have different property names
+    // Utility methods used by MoveableObject for preview transparency.
     public static void SetMaterialTransparent(Material mat)
     {
         mat.SetFloat("_Surface", 1f);
@@ -198,6 +244,4 @@ public class ShipBuildController : MonoBehaviour
         mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
         mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
     }
-
-
 }

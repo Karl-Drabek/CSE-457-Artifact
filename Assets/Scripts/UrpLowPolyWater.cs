@@ -4,12 +4,18 @@
 // https://assetstore.unity.com/packages/tools/particles-effects/lowpoly-water-107563
 // It is intentionally simplified for this project and is not a direct copy.
 using System;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.Serialization;
 
 [ExecuteAlways]
 [AddComponentMenu("Water/URP Low Poly Water")]
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
+/// <summary>
+/// Low-poly water surface used by the generated world. World.cs owns the
+/// authoritative settings and pushes them into this component for each chunk.
+/// </summary>
 public class UrpLowPolyWater : MonoBehaviour
 {
     const string LegacyShaderPrefix = "LowPolyWater/";
@@ -23,6 +29,32 @@ public class UrpLowPolyWater : MonoBehaviour
     const float WhirlpoolMaxVisualAmplitudeRatio = 0.12f;
     const float MinWhirlpoolDirectionDistance = 0.0001f;
     const float MinWhitecapCreaseRange = 0.001f;
+    const string WaterUpdateSampleName = "UrpLowPolyWater.Update";
+    const string AnimateMeshSampleName = "UrpLowPolyWater.AnimateMesh";
+    const string SampleSurfaceSampleName = "UrpLowPolyWater.TryGetSurfaceDataAtWorldPosition";
+    const string UpdateFlatSurfaceDataSampleName = "UrpLowPolyWater.UpdateFlatSurfaceData";
+
+    struct ProfileScope : IDisposable
+    {
+        readonly bool active;
+
+        public ProfileScope(string sampleName)
+        {
+            active = !string.IsNullOrEmpty(sampleName);
+            if (active)
+            {
+                Profiler.BeginSample(sampleName);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (active)
+            {
+                Profiler.EndSample();
+            }
+        }
+    }
 
     [Serializable]
     public struct GerstnerWave
@@ -79,40 +111,44 @@ public class UrpLowPolyWater : MonoBehaviour
         }
     }
 
-    public static UrpLowPolyWater ActiveSurface { get; private set; }
+    static readonly HashSet<UrpLowPolyWater> ActiveSurfaces = new HashSet<UrpLowPolyWater>();
 
-    [Header("Generated Plane")]
-    [Range(2, 256)]
+    public static UrpLowPolyWater ActiveSurface => GetAnyActiveSurface();
+    public static int ActiveSurfaceCount => CountActiveSurfaces();
+
+    [SerializeField, HideInInspector, Range(2, 256)]
     public int resolution = 32;
 
+    [SerializeField, HideInInspector]
     public Vector2 size = new Vector2(8f, 8f);
 
+    [SerializeField, HideInInspector]
     public float baseHeight = 0.05f;
 
-    [Header("Gerstner Waves")]
+    [SerializeField, HideInInspector]
     public GerstnerWave[] waves = Array.Empty<GerstnerWave>();
 
-    [Header("Water Features")]
+    [SerializeField, HideInInspector]
     public WhirlpoolFeature[] whirlpools = Array.Empty<WhirlpoolFeature>();
 
-    [Header("Whitecaps")]
+    [SerializeField, HideInInspector]
     public bool enableWhitecaps;
 
-    [Min(0f)]
+    [SerializeField, HideInInspector, Min(0f)]
     public float whitecapHeightThreshold = 0.2f;
 
     [FormerlySerializedAs("whitecapSlopeAngle")]
-    [Range(0f, 180f)]
+    [SerializeField, HideInInspector, Range(0f, 180f)]
     public float whitecapCreaseAngle = 20f;
 
-    [Range(1, 16)]
+    [SerializeField, HideInInspector, Range(1, 16)]
     public int whitecapTriangleStride = 2;
 
     [FormerlySerializedAs("whitecapSlopeBlend")]
-    [Min(0f)]
+    [SerializeField, HideInInspector, Min(0f)]
     public float whitecapCreaseBlendAngle = 12f;
 
-    [Range(0f, 1f)]
+    [SerializeField, HideInInspector, Range(0f, 1f)]
     public float whitecapStrength = 1f;
 
     // Hidden legacy fields preserve older scenes authored before waves became a variable-size list.
@@ -149,12 +185,14 @@ public class UrpLowPolyWater : MonoBehaviour
     [SerializeField, HideInInspector, FormerlySerializedAs("legacyWaveSettingsUpgraded")]
     bool legacyWaveSettingsMigrated;
 
-    [Header("Rendering")]
-    [SerializeField]
+    [SerializeField, HideInInspector]
     Material materialOverride;
 
     [SerializeField, HideInInspector]
     Mesh sourceMesh;
+
+    [SerializeField, HideInInspector]
+    bool clipSamplingToSourceTriangles;
 
     MeshFilter meshFilter;
     MeshRenderer meshRenderer;
@@ -172,6 +210,7 @@ public class UrpLowPolyWater : MonoBehaviour
     Vector2[] runtimeUvs = new Vector2[0];
     int[] flatTriangles = new int[0];
     int[] runtimeToSourceIndex = new int[0];
+    bool[] sourceGeneratedCellActivity = Array.Empty<bool>();
     float sampledBaseHeight;
     bool useGeneratedPlane;
     Bounds runtimeBounds;
@@ -197,7 +236,7 @@ public class UrpLowPolyWater : MonoBehaviour
     // Registers this instance as the current water surface and builds an initial mesh state.
     void OnEnable()
     {
-        ActiveSurface = this;
+        ActiveSurfaces.Add(this);
         PrepareSurfaceSettings();
         DestroyLegacyWhitecapParticleObjects();
         Initialize();
@@ -219,30 +258,104 @@ public class UrpLowPolyWater : MonoBehaviour
     // Whitecaps ride on the animated vertex colors, so there is no separate spray system here now.
     void Update()
     {
+        using (new ProfileScope(WaterUpdateSampleName))
+        {
         if (!Application.isPlaying)
         {
             return;
         }
 
+        if (meshRenderer != null && !meshRenderer.isVisible)
+        {
+            return;
+        }
+
         AnimateMesh(Time.time);
+        }
     }
 
     // Called by Unity when the component is disabled or destroyed.
     // Restores the original mesh reference and releases any generated resources.
     void OnDisable()
     {
-        if (ActiveSurface == this)
-        {
-            ActiveSurface = null;
-        }
+        ActiveSurfaces.Remove(this);
 
         RestoreSourceMesh();
         DestroyGeneratedSourceMesh();
     }
 
+    public static bool TryResolveSurfaceAtWorldPosition(Vector3 worldPosition, out UrpLowPolyWater water)
+    {
+        foreach (UrpLowPolyWater candidate in ActiveSurfaces)
+        {
+            if (candidate == null || !candidate.isActiveAndEnabled)
+            {
+                continue;
+            }
+
+            if (candidate.ContainsWorldPosition(worldPosition))
+            {
+                water = candidate;
+                return true;
+            }
+        }
+
+        water = GetAnyActiveSurface();
+        return water != null;
+    }
+
+    static UrpLowPolyWater GetAnyActiveSurface()
+    {
+        foreach (UrpLowPolyWater surface in ActiveSurfaces)
+        {
+            if (surface != null && surface.isActiveAndEnabled)
+            {
+                return surface;
+            }
+        }
+
+        return null;
+    }
+
+    static int CountActiveSurfaces()
+    {
+        int count = 0;
+        foreach (UrpLowPolyWater surface in ActiveSurfaces)
+        {
+            if (surface != null && surface.isActiveAndEnabled)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public bool ContainsWorldPosition(Vector3 worldPosition)
+    {
+        Vector3 localPosition = transform.InverseTransformPoint(worldPosition);
+        Vector2 queryHalfSize = GetQueryableHalfSize();
+        return Mathf.Abs(localPosition.x) <= queryHalfSize.x
+            && Mathf.Abs(localPosition.z) <= queryHalfSize.y;
+    }
+
     // Called by World whenever the generated flat water object is rebuilt.
     // Switches this component into generated-plane mode and syncs world-owned settings.
-    public void SyncFromWorld(int newResolution, Vector2 newSize, float newBaseHeight, Material assignedMaterial)
+    public void SyncFromWorld(
+        int newResolution,
+        Vector2 newSize,
+        float newBaseHeight,
+        Material assignedMaterial,
+        GerstnerWave[] assignedWaves,
+        WhirlpoolFeature[] assignedWhirlpools,
+        bool assignedEnableWhitecaps,
+        float assignedWhitecapHeightThreshold,
+        float assignedWhitecapCreaseAngle,
+        int assignedWhitecapTriangleStride,
+        float assignedWhitecapCreaseBlendAngle,
+        float assignedWhitecapStrength,
+        Mesh assignedSourceMesh = null,
+        bool assignedClipSamplingToSourceTriangles = false)
     {
         resolution = Mathf.Max(2, newResolution);
         size = new Vector2(
@@ -250,7 +363,26 @@ public class UrpLowPolyWater : MonoBehaviour
             Mathf.Max(0.01f, newSize.y));
         baseHeight = newBaseHeight;
         materialOverride = assignedMaterial;
-        useGeneratedPlane = true;
+        waves = assignedWaves != null ? (GerstnerWave[])assignedWaves.Clone() : Array.Empty<GerstnerWave>();
+        whirlpools = assignedWhirlpools != null ? (WhirlpoolFeature[])assignedWhirlpools.Clone() : Array.Empty<WhirlpoolFeature>();
+        enableWhitecaps = assignedEnableWhitecaps;
+        whitecapHeightThreshold = assignedWhitecapHeightThreshold;
+        whitecapCreaseAngle = assignedWhitecapCreaseAngle;
+        whitecapTriangleStride = assignedWhitecapTriangleStride;
+        whitecapCreaseBlendAngle = assignedWhitecapCreaseBlendAngle;
+        whitecapStrength = assignedWhitecapStrength;
+        clipSamplingToSourceTriangles = assignedClipSamplingToSourceTriangles;
+        useGeneratedPlane = assignedSourceMesh == null;
+        sourceMesh = assignedSourceMesh;
+
+        if (!useGeneratedPlane)
+        {
+            meshFilter ??= GetComponent<MeshFilter>();
+            if (meshFilter != null)
+            {
+                meshFilter.sharedMesh = assignedSourceMesh;
+            }
+        }
 
         PrepareSurfaceSettings();
         Initialize();
@@ -349,8 +481,43 @@ public class UrpLowPolyWater : MonoBehaviour
         meshFilter = GetComponent<MeshFilter>();
         meshRenderer = GetComponent<MeshRenderer>();
         EnsureSourceMesh();
+        RebuildGeneratedCellActivity();
         RebuildFlatMesh();
         EnsureRenderableMaterial();
+    }
+
+    void RebuildGeneratedCellActivity()
+    {
+        int safeResolution = Mathf.Max(2, resolution);
+        int cellCount = Mathf.Max(0, (safeResolution - 1) * (safeResolution - 1));
+        if (sourceMesh == null || sourceMesh.vertexCount != safeResolution * safeResolution || cellCount == 0)
+        {
+            sourceGeneratedCellActivity = Array.Empty<bool>();
+            return;
+        }
+
+        bool[] cellActivity = new bool[cellCount];
+        int[] sourceTriangles = sourceMesh.triangles;
+        if (sourceTriangles == null)
+        {
+            sourceGeneratedCellActivity = cellActivity;
+            return;
+        }
+
+        for (int i = 0; i + 2 < sourceTriangles.Length; i += 3)
+        {
+            int bottomLeftIndex = Mathf.Min(sourceTriangles[i], Mathf.Min(sourceTriangles[i + 1], sourceTriangles[i + 2]));
+            int cellX = bottomLeftIndex % safeResolution;
+            int cellZ = bottomLeftIndex / safeResolution;
+            if (cellX < 0 || cellZ < 0 || cellX >= safeResolution - 1 || cellZ >= safeResolution - 1)
+            {
+                continue;
+            }
+
+            cellActivity[cellX + cellZ * (safeResolution - 1)] = true;
+        }
+
+        sourceGeneratedCellActivity = cellActivity;
     }
 
     // Cleans up children left behind by older whitecap particle experiments when scenes reload.
@@ -505,6 +672,8 @@ public class UrpLowPolyWater : MonoBehaviour
     // Called in play mode every frame and also once during setup to show the initial surface shape.
     void AnimateMesh(float timeSeconds)
     {
+        using (new ProfileScope(AnimateMeshSampleName))
+        {
         if (runtimeMesh == null
             || sourceBaseVertices == null
             || sourceBaseVertices.Length == 0
@@ -536,6 +705,7 @@ public class UrpLowPolyWater : MonoBehaviour
         UpdateFlatSurfaceData(animatedVertices);
         runtimeMesh.bounds = runtimeBounds;
         lastAnimatedTime = timeSeconds;
+        }
     }
 
     // Samples the water height and normal directly under a world-space point.
@@ -546,6 +716,8 @@ public class UrpLowPolyWater : MonoBehaviour
         out float surfaceHeight,
         out Vector3 surfaceNormal)
     {
+        using (new ProfileScope(SampleSurfaceSampleName))
+        {
         // Physics may query the surface between rendered frames, so advance the generated
         // mesh to the requested sample time before reading back height from it.
         AnimateMesh(timeSeconds);
@@ -572,6 +744,13 @@ public class UrpLowPolyWater : MonoBehaviour
             return true;
         }
 
+        if (clipSamplingToSourceTriangles)
+        {
+            surfaceHeight = 0f;
+            surfaceNormal = Vector3.up;
+            return false;
+        }
+
         if (TrySampleAnalyticSurface(localPosition, timeSeconds, out localSurfaceHeight, out localSurfaceNormal))
         {
             Vector3 analyticSurfacePoint = new Vector3(
@@ -587,6 +766,7 @@ public class UrpLowPolyWater : MonoBehaviour
         surfaceHeight = 0f;
         surfaceNormal = Vector3.up;
         return false;
+        }
     }
 
     // Returns the horizontal water flow at a point so buoyancy can react to currents and whirlpools.
@@ -608,8 +788,7 @@ public class UrpLowPolyWater : MonoBehaviour
     bool TrySampleRenderedGeneratedPlane(Vector3 localPosition, out float localSurfaceHeight, out Vector3 localSurfaceNormal)
     {
         int safeResolution = Mathf.Max(2, resolution);
-        if (!useGeneratedPlane
-            || sourceAnimatedVertices == null
+        if (sourceAnimatedVertices == null
             || sourceAnimatedVertices.Length != safeResolution * safeResolution)
         {
             localSurfaceHeight = 0f;
@@ -721,6 +900,16 @@ public class UrpLowPolyWater : MonoBehaviour
         out float localSurfaceHeight,
         out Vector3 localSurfaceNormal)
     {
+        int cellIndex = cellX + cellZ * Mathf.Max(safeResolution - 1, 1);
+        if (sourceGeneratedCellActivity != null
+            && sourceGeneratedCellActivity.Length > 0
+            && (cellIndex < 0 || cellIndex >= sourceGeneratedCellActivity.Length || !sourceGeneratedCellActivity[cellIndex]))
+        {
+            localSurfaceHeight = 0f;
+            localSurfaceNormal = Vector3.up;
+            return false;
+        }
+
         int bottomLeftIndex = cellX + cellZ * safeResolution;
         int bottomRightIndex = bottomLeftIndex + 1;
         int topLeftIndex = bottomLeftIndex + safeResolution;
@@ -788,13 +977,14 @@ public class UrpLowPolyWater : MonoBehaviour
     Vector3 EvaluateSurfacePoint(Vector3 sourceVertex, float timeSeconds)
     {
         Vector3 surfacePoint = sourceVertex;
-        Vector2 anchorXZ = new Vector2(sourceVertex.x, sourceVertex.z);
-        float waveStrengthMultiplier = GetWaveStrengthMultiplier(anchorXZ);
+        Vector3 worldAnchor = transform.TransformPoint(sourceVertex);
+        Vector2 worldAnchorXZ = new Vector2(worldAnchor.x, worldAnchor.z);
+        World.WaveDistanceProfile waveProfile = GetWaveDistanceProfile(worldAnchorXZ);
         int waveCount = GetActiveWaveCount();
 
         for (int i = 0; i < waves.Length; i++)
         {
-            ApplyGerstnerWave(ref surfacePoint, anchorXZ, timeSeconds, waves[i], waveCount, waveStrengthMultiplier);
+            ApplyGerstnerWave(ref surfacePoint, worldAnchorXZ, timeSeconds, waves[i], waveCount, waveProfile);
         }
 
         ApplyWhirlpoolFeatures(ref surfacePoint, timeSeconds);
@@ -805,26 +995,27 @@ public class UrpLowPolyWater : MonoBehaviour
     // Called by EvaluateSurfacePoint while iterating over the configurable wave list.
     void ApplyGerstnerWave(
         ref Vector3 surfacePoint,
-        Vector2 anchorXZ,
+        Vector2 worldAnchorXZ,
         float timeSeconds,
         GerstnerWave wave,
         int totalWaveCount,
-        float waveStrengthMultiplier)
+        World.WaveDistanceProfile waveProfile)
     {
-        float effectiveAmplitude = wave.amplitude * Mathf.Max(waveStrengthMultiplier, 0f);
+        float effectiveAmplitude = wave.amplitude * Mathf.Max(waveProfile.heightMultiplier, 0f);
         if (effectiveAmplitude <= 0f)
         {
             return;
         }
 
         Vector2 normalizedDirection = NormalizeDirection(wave.direction);
-        float safeWaveLength = Mathf.Max(0.001f, wave.waveLength);
+        float effectiveWaveLength = wave.waveLength * Mathf.Max(waveProfile.lengthMultiplier, 0.0001f);
+        float safeWaveLength = Mathf.Max(0.001f, effectiveWaveLength);
         float waveNumber = Mathf.PI * 2f / safeWaveLength;
         float clampedSteepness = Mathf.Clamp01(wave.steepness);
         float horizontalFactor = Mathf.Min(
             1f,
             clampedSteepness / Mathf.Max(waveNumber * effectiveAmplitude * Mathf.Max(totalWaveCount, 1), 0.0001f));
-        float phase = waveNumber * Vector2.Dot(normalizedDirection, anchorXZ) + timeSeconds * wave.speed;
+        float phase = waveNumber * Vector2.Dot(normalizedDirection, worldAnchorXZ) + timeSeconds * wave.speed;
         float cosine = Mathf.Cos(phase);
         float sine = Mathf.Sin(phase);
 
@@ -1013,14 +1204,14 @@ public class UrpLowPolyWater : MonoBehaviour
     {
         int waveCount = GetActiveWaveCount();
         float maxDisplacement = 0f;
-        float waveStrengthMultiplier = GetMaximumWaveStrengthMultiplier();
+        World.WaveDistanceProfile waveProfile = GetMaximumWaveDistanceProfile();
 
         for (int i = 0; i < waves.Length; i++)
         {
             GerstnerWave wave = waves[i];
             maxDisplacement += ComputeWaveHorizontalDisplacement(
-                wave.amplitude * waveStrengthMultiplier,
-                wave.waveLength,
+                wave.amplitude * waveProfile.heightMultiplier,
+                wave.waveLength * waveProfile.lengthMultiplier,
                 wave.steepness,
                 waveCount);
         }
@@ -1062,25 +1253,24 @@ public class UrpLowPolyWater : MonoBehaviour
         return horizontalFactor * amplitude;
     }
 
-    float GetWaveStrengthMultiplier(Vector2 localAnchorXZ)
+    World.WaveDistanceProfile GetWaveDistanceProfile(Vector2 worldAnchorXZ)
     {
-        if (OpenWorldManager.Instance == null)
+        if (World.Instance == null)
         {
-            return 1f;
+            return new World.WaveDistanceProfile(1f, 1f, 0f);
         }
 
-        Vector3 worldAnchor = transform.TransformPoint(new Vector3(localAnchorXZ.x, sampledBaseHeight, localAnchorXZ.y));
-        return OpenWorldManager.Instance.GetWaveStrengthMultiplier(worldAnchor);
+        return World.Instance.GetWaveDistanceProfile(new Vector3(worldAnchorXZ.x, sampledBaseHeight, worldAnchorXZ.y));
     }
 
-    float GetMaximumWaveStrengthMultiplier()
+    World.WaveDistanceProfile GetMaximumWaveDistanceProfile()
     {
-        if (OpenWorldManager.Instance == null)
+        if (World.Instance == null)
         {
-            return 1f;
+            return new World.WaveDistanceProfile(1f, 1f, 0f);
         }
 
-        return OpenWorldManager.Instance.GetMaximumWaveStrengthMultiplier();
+        return World.Instance.GetMaximumWaveDistanceProfile();
     }
 
     // Computes the total possible vertical wave excursion for bounds padding.
@@ -1088,10 +1278,11 @@ public class UrpLowPolyWater : MonoBehaviour
     float ComputeCombinedVerticalVariation()
     {
         float totalAmplitude = 0f;
+        World.WaveDistanceProfile waveProfile = GetMaximumWaveDistanceProfile();
 
         for (int i = 0; i < waves.Length; i++)
         {
-            totalAmplitude += Mathf.Max(0f, waves[i].amplitude);
+            totalAmplitude += Mathf.Max(0f, waves[i].amplitude * waveProfile.heightMultiplier);
         }
 
         float maxWhirlpoolDepth = 0f;
@@ -1129,6 +1320,8 @@ public class UrpLowPolyWater : MonoBehaviour
     // Called after creating the flat mesh and after each animated vertex update.
     void UpdateFlatSurfaceData(Vector3[] vertices)
     {
+        using (new ProfileScope(UpdateFlatSurfaceDataSampleName))
+        {
         if (flatNormals == null || flatNormals.Length != vertices.Length)
         {
             flatNormals = new Vector3[vertices.Length];
@@ -1257,6 +1450,7 @@ public class UrpLowPolyWater : MonoBehaviour
 
         runtimeMesh.normals = flatNormals;
         runtimeMesh.colors = runtimeColors;
+        }
     }
 
     void UpdateWhitecapCreaseAngle(int sourceIndex, Vector3 faceNormal)

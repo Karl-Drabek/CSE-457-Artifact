@@ -15,6 +15,7 @@ sealed class WaterBuoyancyEditor : Editor
     {
         Lattice,
         Raycast,
+        RenderedMeshSurface,
         Manual
     }
 
@@ -31,6 +32,7 @@ sealed class WaterBuoyancyEditor : Editor
     SerializedProperty sampleModeProperty;
     SerializedProperty horizontalSampleCountProperty;
     SerializedProperty verticalSampleCountProperty;
+    SerializedProperty renderedMeshSampleCountProperty;
     SerializedProperty verticalEdgeInsetProperty;
     SerializedProperty horizontalEdgeInsetProperty;
     SerializedProperty xEdgeOffsetProperty;
@@ -56,6 +58,7 @@ sealed class WaterBuoyancyEditor : Editor
         sampleModeProperty = serializedObject.FindProperty("sampleMode");
         horizontalSampleCountProperty = serializedObject.FindProperty("horizontalSampleCount");
         verticalSampleCountProperty = serializedObject.FindProperty("verticalSampleCount");
+        renderedMeshSampleCountProperty = serializedObject.FindProperty("renderedMeshSampleCount");
         verticalEdgeInsetProperty = serializedObject.FindProperty("verticalEdgeInset");
         horizontalEdgeInsetProperty = serializedObject.FindProperty("horizontalEdgeInset");
         xEdgeOffsetProperty = serializedObject.FindProperty("xEdgeOffset");
@@ -158,6 +161,12 @@ sealed class WaterBuoyancyEditor : Editor
             {
                 EditorGUILayout.HelpBox("No MeshFilter or SkinnedMeshRenderer found for scene-click placement.", MessageType.Warning);
             }
+        }
+        else if (inspectorSamplingMode == InspectorSamplingMode.RenderedMeshSurface)
+        {
+            DisableSceneTools();
+            EditorGUILayout.PropertyField(renderedMeshSampleCountProperty, new GUIContent("Rendered Mesh Vertex Limit"));
+            EditorGUILayout.HelpBox("Uses rendered mesh vertices as buoyancy points instead of collider bounds. If the mesh has more vertices than the limit, the editor keeps an evenly spaced subset.", MessageType.Info);
         }
         else
         {
@@ -393,7 +402,7 @@ void DrawManualPointGizmos()
                     Vector3 localMin = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.min);
                     Vector3 localMax = TargetBuoyancy.transform.InverseTransformPoint(worldBounds.max);
 
-                    float weight = TargetBuoyancy.calculateWeight(localMin, localMax, localPosition.y);
+                    float weight = TargetBuoyancy.CalculateWeight(localMin, localMax, localPosition.y);
                     weight = Mathf.Max(0.2f, weight);
                     AddManualPoint(localPosition, weight);
                 }
@@ -510,7 +519,9 @@ void DrawManualPointGizmos()
 
         return sampleModeProperty.enumValueIndex == (int)WaterBuoyancy.SampleMode.Lattice
             ? InspectorSamplingMode.Lattice
-            : InspectorSamplingMode.Raycast;
+            : sampleModeProperty.enumValueIndex == (int)WaterBuoyancy.SampleMode.RenderedMeshSurface
+                ? InspectorSamplingMode.RenderedMeshSurface
+                : InspectorSamplingMode.Raycast;
     }
 
     void ApplyInspectorSamplingMode(InspectorSamplingMode mode)
@@ -523,6 +534,10 @@ void DrawManualPointGizmos()
             case InspectorSamplingMode.Lattice:
                 autoGenerateSamplePointsProperty.boolValue = true;
                 sampleModeProperty.enumValueIndex = (int)WaterBuoyancy.SampleMode.Lattice;
+                break;
+            case InspectorSamplingMode.RenderedMeshSurface:
+                autoGenerateSamplePointsProperty.boolValue = true;
+                sampleModeProperty.enumValueIndex = (int)WaterBuoyancy.SampleMode.RenderedMeshSurface;
                 break;
             default:
                 autoGenerateSamplePointsProperty.boolValue = true;
