@@ -537,6 +537,19 @@ public class ShipBuilder : MonoBehaviour
     {
         // Prepare and persist the boat before any scene changes.
         MakeBoatPersistent();
+        // Destroy skybox from build scene
+        GameObject[] existing = GameObject.FindGameObjectsWithTag("Skybox");
+        if (existing.Length > 1)
+        {
+            for (int i = 0; i < existing.Length; i++)
+            {
+                if (existing[i].scene.name == builderSceneName)
+                {
+                    Destroy(existing[i]);
+                    break;
+                }
+            }
+        }
 
         AsyncOperation operation = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
         yield return operation;
