@@ -3,10 +3,6 @@ using UnityEngine.Rendering;
 
 public static class FlatMeshBuilder
 {
-    // These directions are shared by rendering and buoyancy.
-    static readonly Vector2 PrimaryWaveDirection = new Vector2(0.86f, 0.36f).normalized;
-    static readonly Vector2 SecondaryWaveDirection = new Vector2(-0.42f, 0.91f).normalized;
-
     // Builds a flat XZ grid mesh with upward-facing normals.
     // Called by World when creating or resizing the generated ground plane.
     public static void BuildPlaneMesh(Mesh mesh, int resolution, Vector2 size, float height)

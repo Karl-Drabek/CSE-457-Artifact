@@ -25,13 +25,18 @@ public class BoatFollowCamera : MonoBehaviour
     public float pitch = 18f;
 
     Vector3 followVelocity;
+    Transform previousTarget;
 
     void LateUpdate()
     {
         if (target == null)
         {
+            previousTarget = null;
             return;
         }
+
+        bool justAssigned = target != previousTarget;
+        previousTarget = target;
 
         Vector3 localForwardAxis = targetForwardAxis.sqrMagnitude > 0f
             ? targetForwardAxis.normalized
@@ -48,6 +53,14 @@ public class BoatFollowCamera : MonoBehaviour
         Quaternion desiredRotation = Quaternion.LookRotation(targetForward, Vector3.up) * Quaternion.Euler(pitch, 0f, 0f);
         Vector3 focusPoint = target.position + Vector3.up * heightOffset;
         Vector3 desiredPosition = focusPoint - desiredRotation * Vector3.forward * Mathf.Max(distance, MinDistance);
+
+        if (justAssigned)
+        {
+            followVelocity = Vector3.zero;
+            transform.SetPositionAndRotation(desiredPosition,
+                Quaternion.LookRotation(focusPoint - desiredPosition, Vector3.up));
+            return;
+        }
 
         transform.position = Vector3.SmoothDamp(
             transform.position,

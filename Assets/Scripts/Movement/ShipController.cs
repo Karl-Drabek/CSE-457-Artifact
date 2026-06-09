@@ -9,16 +9,16 @@ public class ShipController : MonoBehaviour
 
     [Header("Thrust")]
     [Min(0f)]
-    public float forwardAcceleration = 18f;
+    public float forwardAcceleration = 30f;
 
     [Min(0f)]
-    public float reverseAcceleration = 10f;
+    public float reverseAcceleration = 16f;
 
     [Min(0f)]
-    public float maxForwardSpeed = 12f;
+    public float maxForwardSpeed = 20f;
 
     [Min(0f)]
-    public float maxReverseSpeed = 4f;
+    public float maxReverseSpeed = 7f;
 
     [Header("Steering")]
     [Min(0f)]
@@ -43,6 +43,7 @@ public class ShipController : MonoBehaviour
     Rigidbody body;
     InputAction moveAction;
     Vector2 moveInput;
+    public Vector3 PlanarForward => GetPlanarForward();
 
     void Awake()
     {
@@ -70,6 +71,16 @@ public class ShipController : MonoBehaviour
             return;
         }
 
+        Vector3 planarForward = GetPlanarForward();
+
+        ApplyThrust(planarForward);
+        ApplySteering(planarForward);
+        ApplyLateralDrag(planarForward);
+        ApplyUprightTorque();
+    }
+
+    Vector3 GetPlanarForward()
+    {
         Vector3 forward = transform.TransformDirection(localForwardAxis.normalized);
         Vector3 planarForward = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
         if (planarForward.sqrMagnitude <= 0f)
@@ -77,10 +88,7 @@ public class ShipController : MonoBehaviour
             planarForward = transform.forward;
         }
 
-        ApplyThrust(planarForward);
-        ApplySteering(planarForward);
-        ApplyLateralDrag(planarForward);
-        ApplyUprightTorque();
+        return planarForward;
     }
 
     void ApplyThrust(Vector3 planarForward)

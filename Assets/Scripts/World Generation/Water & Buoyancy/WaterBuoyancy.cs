@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.Serialization;
 
 [RequireComponent(typeof(Rigidbody))]
+/// <summary>
+/// Applies buoyancy by sampling the generated water surface at a set of hull
+/// points and pushing forces back into the rigidbody.
+/// </summary>
 public class WaterBuoyancy : MonoBehaviour
 {
     const float MinDensity = 0.0001f;
@@ -13,6 +18,30 @@ public class WaterBuoyancy : MonoBehaviour
     const float MinWaterFlowSpeed = 0.0001f;
     const float MinRelativeWaterSpeed = 0.0001f;
     const float MinAngularSpeed = 0.0001f;
+    const string BuoyancyFixedUpdateSampleName = "WaterBuoyancy.FixedUpdate";
+    const string RefreshAutoSamplePointsSampleName = "WaterBuoyancy.RefreshAutoSamplePoints";
+
+    struct ProfileScope : IDisposable
+    {
+        readonly bool active;
+
+        public ProfileScope(string sampleName)
+        {
+            active = !string.IsNullOrEmpty(sampleName);
+            if (active)
+            {
+                Profiler.BeginSample(sampleName);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (active)
+            {
+                Profiler.EndSample();
+            }
+        }
+    }
 
     [Serializable]
     public struct SamplePoint
@@ -33,6 +62,7 @@ public class WaterBuoyancy : MonoBehaviour
     {
         Lattice,
         Raycast,
+        RenderedMeshSurface,
         Manual
     }
 
@@ -98,6 +128,9 @@ public class WaterBuoyancy : MonoBehaviour
     [Range(2, 6)]
     public int verticalSampleCount = 3;
 
+    [Range(4, 256)]
+    public int renderedMeshSampleCount = 32;
+
     [Range(0f, 0.45f)]
     public float verticalEdgeInset = DefaultEdgeInset;
 
@@ -122,6 +155,7 @@ public class WaterBuoyancy : MonoBehaviour
     Rigidbody body;
     Collider[] cachedColliders = Array.Empty<Collider>();
     SamplePoint[] autoSamplePoints = Array.Empty<SamplePoint>();
+    Mesh bakedSkinnedSamplingMesh;
 
     void Awake()
     {
@@ -131,6 +165,23 @@ public class WaterBuoyancy : MonoBehaviour
     void OnEnable()
     {
         RefreshState();
+    }
+
+    void OnDisable()
+    {
+        if (bakedSkinnedSamplingMesh != null)
+        {
+            if (Application.isPlaying)
+            {
+                Destroy(bakedSkinnedSamplingMesh);
+            }
+            else
+            {
+                DestroyImmediate(bakedSkinnedSamplingMesh);
+            }
+
+            bakedSkinnedSamplingMesh = null;
+        }
     }
 
     void OnValidate()
@@ -153,12 +204,9 @@ public class WaterBuoyancy : MonoBehaviour
 
     void FixedUpdate()
     {
-        if (body == null)
+        using (new ProfileScope(BuoyancyFixedUpdateSampleName))
         {
-            return;
-        }
-
-        if (!TryResolveWaterSurface(out UrpLowPolyWater water))
+        if (body == null)
         {
             return;
         }
@@ -188,6 +236,11 @@ public class WaterBuoyancy : MonoBehaviour
             }
 
             Vector3 worldPoint = transform.TransformPoint(samplePoint.localPosition);
+            if (!UrpLowPolyWater.TryResolveSurfaceAtWorldPosition(worldPoint, out UrpLowPolyWater water))
+            {
+                continue;
+            }
+
             if (!water.TryGetSurfaceDataAtWorldPosition(worldPoint, timeSeconds, out float waterHeight, out Vector3 waterNormal))
             {
                 continue;
@@ -232,6 +285,7 @@ public class WaterBuoyancy : MonoBehaviour
                 body.AddTorque(-Vector3.right * (pitchVelocity * pitchDamping * weightedSubmergence), ForceMode.Acceleration);
             }
         }
+        }
     }
 
     // Rebuilds cached references, upgrades older serialized data, and refreshes auto samples.
@@ -242,19 +296,6 @@ public class WaterBuoyancy : MonoBehaviour
         UpgradeLegacyInsetSettings();
         SanitizeSampleSettings();
         RefreshAutoSamplePoints();
-    }
-
-    // Finds the active water surface, with a scene lookup fallback for editor setup order issues.
-    bool TryResolveWaterSurface(out UrpLowPolyWater water)
-    {
-        water = UrpLowPolyWater.ActiveSurface;
-        if (water != null)
-        {
-            return true;
-        }
-
-        water = FindAnyObjectByType<UrpLowPolyWater>();
-        return water != null;
     }
 
     // Caches the rigidbody and collider set used by buoyancy and sample generation.
@@ -323,6 +364,7 @@ public class WaterBuoyancy : MonoBehaviour
         zEdgeOffset = Mathf.Clamp(zEdgeOffset, -1f, 1f);
         horizontalSampleCount = Mathf.Max(2, horizontalSampleCount);
         verticalSampleCount = Mathf.Max(2, verticalSampleCount);
+        renderedMeshSampleCount = Mathf.Max(4, renderedMeshSampleCount);
     }
 
     // Returns the currently active point set so physics and gizmos stay in sync.
@@ -413,13 +455,22 @@ public class WaterBuoyancy : MonoBehaviour
         body.AddTorque(-body.angularVelocity * (waterAngularDrag * weightedSubmergence), ForceMode.Acceleration);
     }
 
-    // Rebuilds the currently selected auto-generated sample layout from this object's colliders.
+    // Rebuilds the currently selected auto-generated sample layout from either colliders
+    // or rendered meshes, depending on the active sampling mode.
     void RefreshAutoSamplePoints()
     {
+        using (new ProfileScope(RefreshAutoSamplePointsSampleName))
+        {
         EnsureSetup();
 
-        if (sampleMode == SampleMode.Manual)
+        if (sampleMode == SampleMode.RenderedMeshSurface)
         {
+            autoSamplePoints = GenerateRenderedMeshSurfaceSamplePoints(renderedMeshSampleCount);
+            if (autoSamplePoints.Length == 0)
+            {
+                autoSamplePoints = FallbackSamplePoints;
+            }
+
             return;
         }
 
@@ -438,21 +489,29 @@ public class WaterBuoyancy : MonoBehaviour
         int safeHorizontalCount = Mathf.Max(2, horizontalSampleCount);
         int safeVerticalCount = Mathf.Max(2, verticalSampleCount);
 
-        autoSamplePoints = sampleMode == SampleMode.Raycast
-            ? GenerateRaycastSamplePoints(worldBounds, safeHorizontalCount, horizontalEdgeInset, xEdgeOffset, zEdgeOffset)
-            : GenerateLatticePoints(worldBounds, safeHorizontalCount, safeVerticalCount, verticalEdgeInset, horizontalEdgeInset);
+        switch (sampleMode)
+        {
+            case SampleMode.Raycast:
+                autoSamplePoints = GenerateRaycastSamplePoints(safeHorizontalCount, horizontalEdgeInset, xEdgeOffset, zEdgeOffset);
+                break;
+
+            default:
+                autoSamplePoints = GenerateLatticePoints(worldBounds, safeHorizontalCount, safeVerticalCount, verticalEdgeInset, horizontalEdgeInset);
+                break;
+        }
 
         if (autoSamplePoints.Length == 0)
         {
             autoSamplePoints = FallbackSamplePoints;
         }
+        }
     }
 
-    // Builds a surface-following sample grid by raycasting upward through this object's colliders.
-    SamplePoint[] GenerateRaycastSamplePoints(Bounds worldBounds, int safeHorizontalCount, float inset, float xOffset, float zOffset)
+    // Builds a surface-following sample grid by raycasting upward through the rendered
+    // boat mesh when possible, with collider fallback only if no usable mesh exists.
+    SamplePoint[] GenerateRaycastSamplePoints(int safeHorizontalCount, float inset, float xOffset, float zOffset)
     {
-        // Use local bounds directly so rotation doesn't skew the grid
-        if (!TryGetCombinedLocalBounds(out Bounds localBounds))
+        if (!TryGetRaycastSamplingLocalBounds(out Bounds localBounds))
         {
             return Array.Empty<SamplePoint>();
         }
@@ -479,38 +538,44 @@ public class WaterBuoyancy : MonoBehaviour
                 Vector3 worldRayOrigin = transform.TransformPoint(localRayOrigin);
                 Vector3 worldRayDirection = transform.up;
 
-                RaycastHit[] hits = Physics.RaycastAll(worldRayOrigin, worldRayDirection, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-                if (hits.Length == 0)
+                if (!TryGetRaycastSampleHit(new Ray(worldRayOrigin, worldRayDirection), rayLength, out Vector3 hitWorldPoint))
                 {
                     continue;
                 }
 
-                RaycastHit closestHit = default;
-                bool foundHit = false;
-                float closestDistance = float.PositiveInfinity;
-
-                for (int hitIndex = 0; hitIndex < hits.Length; hitIndex++)
-                {
-                    RaycastHit hit = hits[hitIndex];
-                    if (!IsOwnedCollider(hit.collider) || hit.distance >= closestDistance)
-                    {
-                        continue;
-                    }
-
-                    closestDistance = hit.distance;
-                    closestHit = hit;
-                    foundHit = true;
-                }
-
-                if (!foundHit)
-                {
-                    continue;
-                }
-
-                float weight = calculateWeight(localMin.y, transform.InverseTransformPoint(closestHit.point).y);
+                Vector3 localHitPoint = transform.InverseTransformPoint(hitWorldPoint);
+                float weight = CalculateWeight(localMin, localMax, localHitPoint.y);
                 weight = Mathf.Max(0.2f, weight);
-                generatedPoints.Add(new SamplePoint(transform.InverseTransformPoint(closestHit.point), weight));
+                generatedPoints.Add(new SamplePoint(localHitPoint, weight));
             }
+        }
+
+        return generatedPoints.ToArray();
+    }
+
+    // Samples points directly from the rendered mesh vertices so large visible hulls can
+    // use their actual rendered shape instead of a collider-derived grid.
+    SamplePoint[] GenerateRenderedMeshSurfaceSamplePoints(int sampleCount)
+    {
+        if (!TryCollectRenderedMeshVertices(out List<Vector3> localVertices, out Bounds localBounds))
+        {
+            return Array.Empty<SamplePoint>();
+        }
+
+        int clampedSampleCount = Mathf.Min(sampleCount, localVertices.Count);
+        if (clampedSampleCount <= 0)
+        {
+            return Array.Empty<SamplePoint>();
+        }
+
+        List<SamplePoint> generatedPoints = new List<SamplePoint>(clampedSampleCount);
+        float step = localVertices.Count / (float)clampedSampleCount;
+        for (int i = 0; i < clampedSampleCount; i++)
+        {
+            int vertexIndex = Mathf.Min(Mathf.FloorToInt(i * step), localVertices.Count - 1);
+            Vector3 localPoint = localVertices[vertexIndex];
+            float weight = Mathf.Max(0.2f, CalculateWeight(localBounds.min, localBounds.max, localPoint.y));
+            generatedPoints.Add(new SamplePoint(localPoint, weight));
         }
 
         return generatedPoints.ToArray();
@@ -544,9 +609,9 @@ public class WaterBuoyancy : MonoBehaviour
     }
 
     // Keeps raycast sampling from snapping to unrelated colliders outside this buoyancy hierarchy.
-    bool TryGetOwnRaycastHit(Vector3 rayOrigin, float rayLength, out RaycastHit closestHit)
+    bool TryGetOwnRaycastHit(Vector3 rayOrigin, Vector3 rayDirection, float rayLength, out RaycastHit closestHit)
     {
-        RaycastHit[] hits = Physics.RaycastAll(rayOrigin, Vector3.up, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        RaycastHit[] hits = Physics.RaycastAll(rayOrigin, rayDirection, rayLength, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
         closestHit = default;
 
         bool foundHit = false;
@@ -565,6 +630,33 @@ public class WaterBuoyancy : MonoBehaviour
         }
 
         return foundHit;
+    }
+
+    bool TryGetRaycastSampleHit(Ray worldRay, float rayLength, out Vector3 hitWorldPoint)
+    {
+        if (TryGetNearestRenderedMeshHit(worldRay, out hitWorldPoint))
+        {
+            return true;
+        }
+
+        if (TryGetOwnRaycastHit(worldRay.origin, worldRay.direction, rayLength, out RaycastHit colliderHit))
+        {
+            hitWorldPoint = colliderHit.point;
+            return true;
+        }
+
+        hitWorldPoint = default;
+        return false;
+    }
+
+    bool TryGetRaycastSamplingLocalBounds(out Bounds localBounds)
+    {
+        if (TryGetCombinedRenderedMeshLocalBounds(out localBounds))
+        {
+            return true;
+        }
+
+        return TryGetCombinedLocalBounds(out localBounds);
     }
 
     // Returns true when a collider belongs to this buoyancy object or one of its children.
@@ -619,40 +711,9 @@ public class WaterBuoyancy : MonoBehaviour
                 continue;
             }
 
-            // Get bounds in local space directly depending on collider type
-            Bounds localBounds;
-            if (collider is BoxCollider box)
-            {
-                localBounds = new Bounds(box.center, box.size);
-            }
-            else if (collider is SphereCollider sphere)
-            {
-                float diameter = sphere.radius * 2f;
-                localBounds = new Bounds(sphere.center, new Vector3(diameter, diameter, diameter));
-            }
-            else if (collider is CapsuleCollider capsule)
-            {
-                float diameter = capsule.radius * 2f;
-                Vector3 size = new Vector3(diameter, capsule.height, diameter);
-                localBounds = new Bounds(capsule.center, size);
-            }
-            else if (collider is MeshCollider mesh && mesh.sharedMesh != null)
-            {
-                localBounds = mesh.sharedMesh.bounds;
-            }
-            else
+            if (!TryEncapsulateWorldBoundsInLocalSpace(collider.bounds, ref combined, ref hasBounds))
             {
                 continue;
-            }
-
-            if (!hasBounds)
-            {
-                combined = localBounds;
-                hasBounds = true;
-            }
-            else
-            {
-                combined.Encapsulate(localBounds);
             }
         }
 
@@ -663,11 +724,12 @@ public class WaterBuoyancy : MonoBehaviour
     {
         autoGenerateSamplePoints = false;
         sampleMode = SampleMode.Manual;
+        Vector3 localMin = new Vector3(0f, local_min_y, 0f);
         SamplePoint[] samples = new SamplePoint[points.Length];
         for (int i = 0; i < points.Length; i++)
         {
             Vector3 point = points[i];
-            samples[i] = new SamplePoint(point, Mathf.Max(0.1f, calculateWeight(local_min_y, point.y)));
+            samples[i] = new SamplePoint(point, Mathf.Max(0.1f, CalculateWeight(localMin, Vector3.zero, point.y)));
         }
         manualSamplePoints = samples;
         ClearAutoGeneratedPoints();
@@ -677,6 +739,298 @@ public class WaterBuoyancy : MonoBehaviour
     void ClearAutoGeneratedPoints()
     {
         autoSamplePoints = Array.Empty<SamplePoint>();
+    }
+
+
+    bool TryGetCombinedRenderedMeshLocalBounds(out Bounds combinedLocalBounds)
+    {
+        combinedLocalBounds = default;
+        bool hasBounds = false;
+
+        MeshFilter[] meshFilters = GetComponentsInChildren<MeshFilter>();
+        for (int i = 0; i < meshFilters.Length; i++)
+        {
+            MeshFilter meshFilter = meshFilters[i];
+            if (meshFilter == null || meshFilter.sharedMesh == null || !meshFilter.sharedMesh.isReadable)
+            {
+                continue;
+            }
+
+            AppendMeshVertices(meshFilter.sharedMesh, meshFilter.transform.localToWorldMatrix, null, ref combinedLocalBounds, ref hasBounds);
+        }
+
+        SkinnedMeshRenderer[] skinnedMeshes = GetComponentsInChildren<SkinnedMeshRenderer>();
+        for (int i = 0; i < skinnedMeshes.Length; i++)
+        {
+            SkinnedMeshRenderer skinnedMesh = skinnedMeshes[i];
+            if (skinnedMesh == null || skinnedMesh.sharedMesh == null)
+            {
+                continue;
+            }
+
+            Mesh bakedMesh = GetOrCreateBakedSkinnedSamplingMesh();
+            skinnedMesh.BakeMesh(bakedMesh);
+            AppendMeshVertices(bakedMesh, skinnedMesh.transform.localToWorldMatrix, null, ref combinedLocalBounds, ref hasBounds);
+        }
+
+        return hasBounds;
+    }
+
+    bool TryCollectRenderedMeshVertices(out List<Vector3> localVertices, out Bounds combinedLocalBounds)
+    {
+        localVertices = new List<Vector3>();
+        combinedLocalBounds = default;
+        bool hasBounds = false;
+
+        MeshFilter[] meshFilters = GetComponentsInChildren<MeshFilter>();
+        for (int i = 0; i < meshFilters.Length; i++)
+        {
+            MeshFilter meshFilter = meshFilters[i];
+            if (meshFilter == null || meshFilter.sharedMesh == null || !meshFilter.sharedMesh.isReadable)
+            {
+                continue;
+            }
+
+            AppendMeshVertices(meshFilter.sharedMesh, meshFilter.transform.localToWorldMatrix, localVertices, ref combinedLocalBounds, ref hasBounds);
+        }
+
+        SkinnedMeshRenderer[] skinnedMeshes = GetComponentsInChildren<SkinnedMeshRenderer>();
+        for (int i = 0; i < skinnedMeshes.Length; i++)
+        {
+            SkinnedMeshRenderer skinnedMesh = skinnedMeshes[i];
+            if (skinnedMesh == null || skinnedMesh.sharedMesh == null)
+            {
+                continue;
+            }
+
+            Mesh bakedMesh = GetOrCreateBakedSkinnedSamplingMesh();
+            skinnedMesh.BakeMesh(bakedMesh);
+            AppendMeshVertices(bakedMesh, skinnedMesh.transform.localToWorldMatrix, localVertices, ref combinedLocalBounds, ref hasBounds);
+        }
+
+        return localVertices.Count > 0 && hasBounds;
+    }
+
+    void AppendMeshVertices(
+        Mesh mesh,
+        Matrix4x4 sourceLocalToWorld,
+        List<Vector3> localVertices,
+        ref Bounds combinedLocalBounds,
+        ref bool hasBounds)
+    {
+        if (mesh == null)
+        {
+            return;
+        }
+
+        Vector3[] vertices = mesh.vertices;
+        if (vertices == null || vertices.Length == 0)
+        {
+            return;
+        }
+
+        Matrix4x4 toRootLocal = transform.worldToLocalMatrix * sourceLocalToWorld;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3 localVertex = toRootLocal.MultiplyPoint3x4(vertices[i]);
+            localVertices?.Add(localVertex);
+            EncapsulateLocalPoint(localVertex, ref combinedLocalBounds, ref hasBounds);
+        }
+    }
+
+    bool TryGetNearestRenderedMeshHit(Ray worldRay, out Vector3 hitWorldPoint)
+    {
+        hitWorldPoint = default;
+        bool foundHit = false;
+        float closestDistance = float.PositiveInfinity;
+
+        MeshFilter[] meshFilters = GetComponentsInChildren<MeshFilter>();
+        for (int i = 0; i < meshFilters.Length; i++)
+        {
+            MeshFilter meshFilter = meshFilters[i];
+            if (meshFilter == null || meshFilter.sharedMesh == null || !meshFilter.sharedMesh.isReadable)
+            {
+                continue;
+            }
+
+            if (!TryIntersectMesh(worldRay, meshFilter.sharedMesh, meshFilter.transform.localToWorldMatrix, out Vector3 candidateHitPoint, out float candidateDistance)
+                || candidateDistance >= closestDistance)
+            {
+                continue;
+            }
+
+            closestDistance = candidateDistance;
+            hitWorldPoint = candidateHitPoint;
+            foundHit = true;
+        }
+
+        SkinnedMeshRenderer[] skinnedMeshes = GetComponentsInChildren<SkinnedMeshRenderer>();
+        for (int i = 0; i < skinnedMeshes.Length; i++)
+        {
+            SkinnedMeshRenderer skinnedMesh = skinnedMeshes[i];
+            if (skinnedMesh == null || skinnedMesh.sharedMesh == null)
+            {
+                continue;
+            }
+
+            Mesh bakedMesh = GetOrCreateBakedSkinnedSamplingMesh();
+            skinnedMesh.BakeMesh(bakedMesh);
+            if (!TryIntersectMesh(worldRay, bakedMesh, skinnedMesh.transform.localToWorldMatrix, out Vector3 candidateHitPoint, out float candidateDistance)
+                || candidateDistance >= closestDistance)
+            {
+                continue;
+            }
+
+            closestDistance = candidateDistance;
+            hitWorldPoint = candidateHitPoint;
+            foundHit = true;
+        }
+
+        return foundHit;
+    }
+
+    bool TryIntersectMesh(Ray worldRay, Mesh mesh, Matrix4x4 localToWorld, out Vector3 hitWorldPoint, out float hitWorldDistance)
+    {
+        hitWorldPoint = default;
+        hitWorldDistance = float.PositiveInfinity;
+
+        if (mesh == null || !mesh.isReadable)
+        {
+            return false;
+        }
+
+        Vector3[] vertices = mesh.vertices;
+        int[] triangles = mesh.triangles;
+        if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length < 3)
+        {
+            return false;
+        }
+
+        Matrix4x4 worldToLocal = localToWorld.inverse;
+        Vector3 localRayOrigin = worldToLocal.MultiplyPoint3x4(worldRay.origin);
+        Vector3 localRayDirection = worldToLocal.MultiplyVector(worldRay.direction).normalized;
+        Ray localRay = new Ray(localRayOrigin, localRayDirection);
+
+        if (!mesh.bounds.IntersectRay(localRay))
+        {
+            return false;
+        }
+
+        bool foundHit = false;
+        for (int triangleIndex = 0; triangleIndex < triangles.Length; triangleIndex += 3)
+        {
+            Vector3 a = vertices[triangles[triangleIndex]];
+            Vector3 b = vertices[triangles[triangleIndex + 1]];
+            Vector3 c = vertices[triangles[triangleIndex + 2]];
+
+            if (!TryIntersectTriangle(localRay, a, b, c, out float localDistance))
+            {
+                continue;
+            }
+
+            Vector3 localPoint = localRay.origin + (localRay.direction * localDistance);
+            Vector3 worldPoint = localToWorld.MultiplyPoint3x4(localPoint);
+            float worldDistance = Vector3.Distance(worldRay.origin, worldPoint);
+            if (worldDistance >= hitWorldDistance)
+            {
+                continue;
+            }
+
+            hitWorldDistance = worldDistance;
+            hitWorldPoint = worldPoint;
+            foundHit = true;
+        }
+
+        return foundHit;
+    }
+
+    static bool TryIntersectTriangle(Ray ray, Vector3 a, Vector3 b, Vector3 c, out float distance)
+    {
+        distance = 0f;
+
+        Vector3 edgeAB = b - a;
+        Vector3 edgeAC = c - a;
+        Vector3 perpendicular = Vector3.Cross(ray.direction, edgeAC);
+        float determinant = Vector3.Dot(edgeAB, perpendicular);
+        if (Mathf.Abs(determinant) < MinWeightSum)
+        {
+            return false;
+        }
+
+        float inverseDeterminant = 1f / determinant;
+        Vector3 triangleToRay = ray.origin - a;
+        float u = Vector3.Dot(triangleToRay, perpendicular) * inverseDeterminant;
+        if (u < 0f || u > 1f)
+        {
+            return false;
+        }
+
+        Vector3 q = Vector3.Cross(triangleToRay, edgeAB);
+        float v = Vector3.Dot(ray.direction, q) * inverseDeterminant;
+        if (v < 0f || (u + v) > 1f)
+        {
+            return false;
+        }
+
+        float hitDistance = Vector3.Dot(edgeAC, q) * inverseDeterminant;
+        if (hitDistance < 0f)
+        {
+            return false;
+        }
+
+        distance = hitDistance;
+        return true;
+    }
+
+    Mesh GetOrCreateBakedSkinnedSamplingMesh()
+    {
+        if (bakedSkinnedSamplingMesh == null)
+        {
+            bakedSkinnedSamplingMesh = new Mesh
+            {
+                name = "WaterBuoyancy_BakedSkinnedSamplingMesh"
+            };
+        }
+
+        return bakedSkinnedSamplingMesh;
+    }
+
+    bool TryEncapsulateWorldBoundsInLocalSpace(Bounds worldBounds, ref Bounds combinedLocalBounds, ref bool hasBounds)
+    {
+        Vector3 min = worldBounds.min;
+        Vector3 max = worldBounds.max;
+
+        Vector3[] corners =
+        {
+            new Vector3(min.x, min.y, min.z),
+            new Vector3(max.x, min.y, min.z),
+            new Vector3(min.x, max.y, min.z),
+            new Vector3(max.x, max.y, min.z),
+            new Vector3(min.x, min.y, max.z),
+            new Vector3(max.x, min.y, max.z),
+            new Vector3(min.x, max.y, max.z),
+            new Vector3(max.x, max.y, max.z)
+        };
+
+        for (int i = 0; i < corners.Length; i++)
+        {
+            Vector3 localCorner = transform.InverseTransformPoint(corners[i]);
+            EncapsulateLocalPoint(localCorner, ref combinedLocalBounds, ref hasBounds);
+        }
+
+        return hasBounds;
+    }
+
+    void EncapsulateLocalPoint(Vector3 localPoint, ref Bounds combinedLocalBounds, ref bool hasBounds)
+    {
+        if (!hasBounds)
+        {
+            combinedLocalBounds = new Bounds(localPoint, Vector3.zero);
+            hasBounds = true;
+            return;
+        }
+
+        combinedLocalBounds.Encapsulate(localPoint);
     }
 
     // Draws the effective point layout so sample placement is visible while tuning buoyancy.
@@ -720,26 +1074,26 @@ public class WaterBuoyancy : MonoBehaviour
             return;
         }
 
-        if (!TryGetCombinedLocalBounds(out Bounds worldBounds))
+        if (!TryGetCombinedLocalBounds(out Bounds localBounds))
         {
             return;
         }
 
-        // Convert bounds to local space so comparison matches stored local positions
-        Vector3 localMin = transform.InverseTransformPoint(worldBounds.min);
-        Vector3 localMax = transform.InverseTransformPoint(worldBounds.max);
+        Vector3 localMin = localBounds.min;
+        Vector3 localMax = localBounds.max;
 
         for (int i = 0; i < manualSamplePoints.Length; i++)
         {
-            float weight = calculateWeight(localMin.y, manualSamplePoints[i].localPosition.y);
+            float weight = CalculateWeight(localMin, localMax, manualSamplePoints[i].localPosition.y);
             weight = Mathf.Max(0.2f, weight);
             manualSamplePoints[i] = new SamplePoint(manualSamplePoints[i].localPosition, Mathf.Max(0.2f, weight));
         }
     }
 
-    public float calculateWeight(float localMin_y, float sample_y_position)
+    public float CalculateWeight(Vector3 localMin, Vector3 localMax, float sampleYPosition)
     {
-        float hull_level = Mathf.InverseLerp(localMin_y, hull_height, sample_y_position);
-        return 1f - Mathf.Abs(hull_level - 0.3f) * 2f;
+        float hullLevel = Mathf.InverseLerp(localMin.y, hull_height, sampleYPosition);
+        return 1f - Mathf.Abs(hullLevel - 0.3f) * 2f;
     }
+
 }

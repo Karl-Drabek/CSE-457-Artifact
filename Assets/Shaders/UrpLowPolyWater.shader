@@ -26,8 +26,8 @@ Shader "Artifacts/URP Low Poly Water"
         Tags
         {
             "RenderPipeline" = "UniversalPipeline"
-            "Queue" = "Transparent"
-            "RenderType" = "Transparent"
+            "Queue" = "Geometry"
+            "RenderType" = "Opaque"
         }
 
         Pass
@@ -35,8 +35,7 @@ Shader "Artifacts/URP Low Poly Water"
             Name "ForwardLit"
             Tags { "LightMode" = "UniversalForward" }
 
-            Blend SrcAlpha OneMinusSrcAlpha
-            ZWrite Off
+            ZWrite On
             Cull Off
 
             HLSLPROGRAM
@@ -142,7 +141,7 @@ Shader "Artifacts/URP Low Poly Water"
                 color = lerp(color, _FoamColor.rgb, foam);
                 color = MixFog(color, input.fogFactor);
 
-                return half4(color, _Alpha);
+                return half4(color, 1.0h);
             }
             ENDHLSL
         }

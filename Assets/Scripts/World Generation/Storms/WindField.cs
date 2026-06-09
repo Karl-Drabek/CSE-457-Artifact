@@ -160,7 +160,7 @@ public class WindField : MonoBehaviour
             return 1f;
         }
 
-        if (!TryResolveWaterSurface(out UrpLowPolyWater water)
+        if (!UrpLowPolyWater.TryResolveSurfaceAtWorldPosition(worldPosition, out UrpLowPolyWater water)
             || !water.TryGetSurfaceDataAtWorldPosition(worldPosition, timeSeconds, out float waterHeight, out _))
         {
             return 1f;
@@ -302,12 +302,6 @@ public class WindField : MonoBehaviour
     bool TryResolveWaterSurface(out UrpLowPolyWater water)
     {
         water = UrpLowPolyWater.ActiveSurface;
-        if (water != null)
-        {
-            return true;
-        }
-
-        water = FindAnyObjectByType<UrpLowPolyWater>();
         return water != null;
     }
 
@@ -543,12 +537,17 @@ public class WindField : MonoBehaviour
             return true;
         }
 
-        if (!hasWater || water == null)
+        if (!hasWater)
         {
             return false;
         }
 
-        return water.TryGetSurfaceDataAtWorldPosition(particle.position, timeSeconds, out float waterHeight, out _)
+        if (!UrpLowPolyWater.TryResolveSurfaceAtWorldPosition(particle.position, out UrpLowPolyWater particleWater))
+        {
+            return false;
+        }
+
+        return particleWater.TryGetSurfaceDataAtWorldPosition(particle.position, timeSeconds, out float waterHeight, out _)
             && particle.position.y < waterHeight;
     }
 
@@ -575,9 +574,10 @@ public class WindField : MonoBehaviour
         float minY = spawnBounds.min.y;
         float maxY = spawnBounds.max.y;
 
+        Vector3 waterQueryPosition = new Vector3(x, spawnBounds.center.y, z);
         if (hasWater
-            && water != null
-            && water.TryGetSurfaceDataAtWorldPosition(new Vector3(x, spawnBounds.center.y, z), timeSeconds, out float waterHeight, out _))
+            && UrpLowPolyWater.TryResolveSurfaceAtWorldPosition(waterQueryPosition, out UrpLowPolyWater queryWater)
+            && queryWater.TryGetSurfaceDataAtWorldPosition(waterQueryPosition, timeSeconds, out float waterHeight, out _))
         {
             minY = Mathf.Max(minY, waterHeight + particleMinHeightAboveWater);
             maxY = Mathf.Max(minY, waterHeight + particleMaxHeightAboveWater);
