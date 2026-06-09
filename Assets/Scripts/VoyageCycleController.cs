@@ -535,13 +535,6 @@ public class VoyageCycleController : MonoBehaviour
             return;
         }
 
-        ShipBuildController buildController = FindFirstObjectByType<ShipBuildController>();
-        if (buildController != null)
-        {
-            buildController.SwitchToSailScene();
-            return;
-        }
-
         Debug.LogWarning("VoyageCycleController could not find ShipBuilder or ShipBuildController to save the ship.", this);
     }
 

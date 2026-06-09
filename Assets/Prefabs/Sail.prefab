@@ -28,8 +28,8 @@ Transform:
   m_GameObject: {fileID: 1816760935457617400}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.6, y: 0, z: 0}
-  m_LocalScale: {x: 0.1, y: 1.5, z: 1.2}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1.5, y: 0.05, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 8542723967714707790}
@@ -164,3 +164,6 @@ MonoBehaviour:
   maxDurability: 75
   currentDurability: 0
   breakForce: 2
+  destroyAfterBreakingSeconds: 3
+  pieceMass: 1
+  localCenterOfMass: {x: 0, y: 0, z: 0}
