@@ -167,3 +167,4 @@ MonoBehaviour:
   destroyAfterBreakingSeconds: 3
   pieceMass: 1
   localCenterOfMass: {x: 0, y: 0, z: 0}
+  goldCost: 5
