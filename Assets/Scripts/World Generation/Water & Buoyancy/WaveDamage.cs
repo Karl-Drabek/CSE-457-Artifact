@@ -5,6 +5,9 @@ public class WaveDamageManager : MonoBehaviour
     [Header("Water")]
     [SerializeField] private UrpLowPolyWater water;
 
+    [Header("Damage State")]
+    [SerializeField] private bool damageEnabled = false;
+
     [Header("Base Damage")]
     [SerializeField] private float damagePerSecond = 3f;
 
@@ -34,6 +37,11 @@ public class WaveDamageManager : MonoBehaviour
 
     private void Update()
     {
+        if (!damageEnabled)
+        {
+            return;
+        }
+
         if (water == null)
         {
             TryFindWater();
@@ -50,6 +58,16 @@ public class WaveDamageManager : MonoBehaviour
         {
             DamagePieceFromWater(piece);
         }
+    }
+
+    public void StartDamage()
+    {
+        damageEnabled = true;
+    }
+
+    public void StopDamage()
+    {
+        damageEnabled = false;
     }
 
     private void TryFindWater()
