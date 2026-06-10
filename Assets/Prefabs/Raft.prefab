@@ -159,7 +159,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::BoatPiece
   parentPiece: {fileID: 0}
   childPieces: []
-  isRootHull: 0
+  isRootHull: 1
   isBroken: 0
   maxDurability: 100
   currentDurability: 0

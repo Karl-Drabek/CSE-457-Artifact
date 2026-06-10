@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class BoatDurabilityUI : MonoBehaviour
 {
@@ -18,7 +19,14 @@ public class BoatDurabilityUI : MonoBehaviour
     [Header("Broken Display")]
     [SerializeField] private float brokenDisplaySeconds = 2f;
 
+    [Header("Root Hull Game Over")]
+    [SerializeField] private string shipBuildingSceneName = "ShipBuilding";
+    [SerializeField] private float returnToBuilderDelay = 2f;
+    [SerializeField] private string boatParentObjectName = "BoatParent";
+
     private float nextRefreshTime;
+    private bool isReturningToBuilder = false;
+
     private readonly StringBuilder builder = new StringBuilder();
 
     private class PieceUIInfo
@@ -90,6 +98,14 @@ public class BoatDurabilityUI : MonoBehaviour
             if (piece.isBroken && info.brokenTime < 0f)
             {
                 info.brokenTime = Time.time;
+            }
+
+            // NEW IMPORTANT PART:
+            // If the root hull breaks, go back to the ship builder scene.
+            if (piece.isRootHull && piece.isBroken && !isReturningToBuilder)
+            {
+                isReturningToBuilder = true;
+                Invoke(nameof(ReturnToShipBuilder), returnToBuilderDelay);
             }
         }
 
@@ -191,6 +207,18 @@ public class BoatDurabilityUI : MonoBehaviour
         }
 
         durabilityText.text = builder.ToString();
+    }
+
+    private void ReturnToShipBuilder()
+    {
+        GameObject boatParent = GameObject.Find(boatParentObjectName);
+
+        if (boatParent != null)
+        {
+            Destroy(boatParent);
+        }
+
+        SceneManager.LoadScene(shipBuildingSceneName, LoadSceneMode.Single);
     }
 
     string PadRichTextLine(string text, int width)
