@@ -45,7 +45,7 @@ public class ShipBuilder : MonoBehaviour
 
     Vector3[] buoyancy_vertices = { };
     Vector3 hull_base_point = Vector3.zero;
-    float hull_local_height = 0f;
+    Vector3 hull_top_point = Vector3.zero;
 
     float goldMessageHideTime = -1f;
 
@@ -65,17 +65,23 @@ public class ShipBuilder : MonoBehaviour
 
         RefreshGoldUi();
 
-        // If a persistent boat already exists, adopt it.
         GameObject existingBoat = GameObject.Find("BoatParent");
         if (existingBoat != null && existingBoat.transform != shipRoot)
         {
-            shipRoot = existingBoat.transform;
-            hullPlaced = true;
-
-            Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
-            if (adoptedBody != null)
+            if (existingBoat.GetComponent<BoatMassManager>() != null)
             {
-                adoptedBody.isKinematic = true;
+                shipRoot = existingBoat.transform;
+                hullPlaced = true;
+
+                Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
+                if (adoptedBody != null)
+                {
+                    adoptedBody.isKinematic = true;
+                }
+            }
+            else
+            {
+                Destroy(existingBoat);
             }
         }
     }
@@ -132,6 +138,16 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
+        bool hasRootHull = shipRoot != null
+            && System.Array.Exists(shipRoot.GetComponentsInChildren<BoatPiece>(), p => p.isRootHull && !p.isBroken);
+        if (!hasRootHull)
+        {
+            Debug.Log("Cannot save ship — hull is missing or broken.", this);
+            hullPlaced = false;
+            if (hullButton != null) hullButton.interactable = true;
+            return;
+        }
+
         VoyageCycleController.SetPhaseToHome();
         StartCoroutine(LoadSailSceneAndTransferBoat());
     }
@@ -152,6 +168,36 @@ public class ShipBuilder : MonoBehaviour
         if (!hullPlaced)
         {
             Debug.Log("Place the hull first.", this);
+            return;
+        }
+
+        if (TryGetHoveredSnapPoint(out SnapPoint snapPoint)
+            && !snapPoint.occupied
+            && snapPoint.acceptsPartType == selectedPart.partType)
+        {
+            if (!TrySpendGoldForSelectedPart())
+            {
+                return;
+            }
+
+            GameObject snapObj = Instantiate(
+                selectedPart.prefab,
+                snapPoint.AttachTransform.position,
+                snapPoint.AttachTransform.rotation,
+                shipRoot);
+
+            BoatPiece snapPiece = snapObj.GetComponent<BoatPiece>();
+            if (snapPiece != null)
+            {
+                BoatPiece parentPiece = snapPoint.GetComponentInParent<BoatPiece>();
+                snapPiece.AttachTo(parentPiece);
+            }
+
+            snapPoint.occupied = true;
+            SetUpPart(snapObj);
+            //selectedPart = null;
+            //DestroyPreview();
+            UpdateSnapPointVisibility();
             return;
         }
 
@@ -197,6 +243,9 @@ public class ShipBuilder : MonoBehaviour
         }
 
         SetUpPart(obj);
+        selectedPart = null;
+        DestroyPreview();
+        UpdateSnapPointVisibility();
     }
 
     void TryPlaceHull()
@@ -242,6 +291,30 @@ public class ShipBuilder : MonoBehaviour
         }
 
         SetUpPart(hullObj);
+    }
+
+    bool TryGetHoveredSnapPoint(out SnapPoint snapPoint)
+    {
+        snapPoint = null;
+
+        if (Camera.main == null || Mouse.current == null)
+        {
+            return false;
+        }
+
+        Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
+        if (!Physics.Raycast(ray, out RaycastHit hit))
+        {
+            return false;
+        }
+
+        snapPoint = hit.collider.GetComponent<SnapPoint>();
+        if (snapPoint == null)
+        {
+            snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
+        }
+
+        return snapPoint != null;
     }
 
     bool TrySpendGoldForSelectedPart()
@@ -379,6 +452,8 @@ public class ShipBuilder : MonoBehaviour
             DestroyPreview();
             selectedPart = null;
         }
+
+        UpdateSnapPointVisibility();
     }
 
     void CreatePreview()
@@ -404,8 +479,15 @@ public class ShipBuilder : MonoBehaviour
             rb.detectCollisions = false;
         }
 
+        foreach (SnapPoint sp in previewObject.GetComponentsInChildren<SnapPoint>())
+        {
+            sp.enabled = false;
+            sp.SetVisible(false);
+        }
+
         ApplyPreviewMaterial(previewObject);
         previewObject.SetActive(false);
+        UpdateSnapPointVisibility();
     }
 
     void DestroyPreview()
@@ -432,6 +514,18 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
+        // Prefer a compatible snap point.
+        SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>()
+            ?? hit.collider.GetComponentInParent<SnapPoint>();
+
+        if (snapPoint != null && !snapPoint.occupied && snapPoint.acceptsPartType == selectedPart.partType)
+        {
+            previewObject.SetActive(true);
+            previewObject.transform.position = snapPoint.AttachTransform.position;
+            previewObject.transform.rotation = snapPoint.AttachTransform.rotation;
+            return;
+        }
+
         bool hitsBoatPiece = hit.collider.GetComponentInParent<BoatPiece>() != null;
 
         if (selectedPart.partType == ShipPartType.Hull)
@@ -453,6 +547,18 @@ public class ShipBuilder : MonoBehaviour
                 previewObject.transform.position = hit.point;
                 previewObject.transform.rotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
             }
+        }
+    }
+
+    void UpdateSnapPointVisibility()
+    {
+        SnapPoint[] snapPoints = FindObjectsByType<SnapPoint>(FindObjectsSortMode.None);
+        foreach (SnapPoint snapPoint in snapPoints)
+        {
+            bool shouldShow = selectedPart != null
+                && !snapPoint.occupied
+                && snapPoint.acceptsPartType == selectedPart.partType;
+            snapPoint.SetVisible(shouldShow);
         }
     }
 
@@ -520,7 +626,7 @@ public class ShipBuilder : MonoBehaviour
 
         buoyancy_vertices = worldPointsOnHull.ToArray();
         hull_base_point = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.min);
-        hull_local_height = meshFilter.sharedMesh.bounds.max.y * meshTransform.localScale.y;
+        hull_top_point  = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.max);
     }
 
     void ApplyHullMeshPoints(WaterBuoyancy buoyancy)
@@ -536,7 +642,9 @@ public class ShipBuilder : MonoBehaviour
         }
 
         hull_base_point = buoyancy.transform.InverseTransformPoint(hull_base_point);
-        buoyancy.hull_height = hull_local_height;
+        // Convert the world-space hull top into the buoyancy root's local space so
+        // hull_height matches the same coordinate frame as the sample points.
+        buoyancy.hull_height = buoyancy.transform.InverseTransformPoint(hull_top_point).y;
         buoyancy.SetManualPoints(buoyancy_vertices, hull_base_point.y);
     }
 
@@ -592,12 +700,6 @@ public class ShipBuilder : MonoBehaviour
         selectionPanel.SetActive(true);
     }
 
-    static bool TryGetCycleManager(out SkyboxCycleManager cycleManager)
-    {
-        cycleManager = GameObject.FindAnyObjectByType<SkyboxCycleManager>();
-        return cycleManager != null;
-    }
-
     IEnumerator LoadSailSceneAndTransferBoat()
     {
         GameObject skybox = GameObject.FindWithTag("Skybox");
@@ -608,6 +710,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         MakeBoatPersistent();
+
 
         if (TryGetCycleManager(out SkyboxCycleManager cycleManager))
         {
@@ -635,6 +738,7 @@ public class ShipBuilder : MonoBehaviour
 
         selectedPart = null;
         DestroyPreview();
+        UpdateSnapPointVisibility();
 
         SceneManager.SetActiveScene(sailScene);
 
@@ -729,6 +833,12 @@ public class ShipBuilder : MonoBehaviour
         {
             shipRoot.gameObject.AddComponent<ShipController>();
         }
+    }
+
+    static bool TryGetCycleManager(out SkyboxCycleManager cycleManager)
+    {
+        cycleManager = FindAnyObjectByType<SkyboxCycleManager>();
+        return cycleManager != null;
     }
 
     static bool IsPointerOverUi()

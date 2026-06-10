@@ -7,12 +7,8 @@ public class OpenWorldBorderIceberg : MonoBehaviour
 {
     void OnCollisionEnter(Collision collision)
     {
-        if (World.Instance == null)
-        {
-            return;
-        }
-
-        World.Instance.HandleBorderCollision(gameObject, collision.transform);
+        if (World.Instance == null) return;
+        World.Instance.HandleBorderCollision(gameObject, collision);
     }
 
     void OnTriggerEnter(Collider other)

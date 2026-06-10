@@ -37,6 +37,10 @@ public class ShipController : MonoBehaviour
     [Min(0f)]
     public float uprightTorque = 4f;
 
+    [Header("World Limits")]
+    [Tooltip("The boat is clamped above this Y so it cannot fall through the world floor.")]
+    public float worldFloorY = -1.35f;
+
     [SerializeField]
     Vector3 localForwardAxis = Vector3.right;
 
@@ -77,6 +81,7 @@ public class ShipController : MonoBehaviour
         ApplySteering(planarForward);
         ApplyLateralDrag(planarForward);
         ApplyUprightTorque();
+        EnforceFloorLimit();
     }
 
     Vector3 GetPlanarForward()
@@ -141,5 +146,32 @@ public class ShipController : MonoBehaviour
     {
         Vector3 tiltAxis = Vector3.Cross(transform.up, Vector3.up);
         body.AddTorque(tiltAxis * uprightTorque, ForceMode.Acceleration);
+    }
+
+    void EnforceFloorLimit()
+    {
+        // Allow the boat to fall naturally once it has sailed past the border wall
+        if (World.Instance != null)
+        {
+            Vector3 p = body.position;
+            float xzDist = new Vector2(p.x, p.z).magnitude;
+            if (xzDist > World.Instance.GetPlayableRadius()) return;
+        }
+
+        if (body.position.y >= worldFloorY)
+        {
+            return;
+        }
+
+        Vector3 pos = body.position;
+        pos.y = worldFloorY;
+        body.MovePosition(pos);
+
+        if (body.linearVelocity.y < 0f)
+        {
+            Vector3 vel = body.linearVelocity;
+            vel.y = 0f;
+            body.linearVelocity = vel;
+        }
     }
 }

@@ -46,6 +46,10 @@ public class BoatMassManager : MonoBehaviour
 
         rb.mass = totalMass;
         rb.centerOfMass = weightedCenter / totalMass;
+        // Recompute the inertia tensor from colliders using the new centre of mass.
+        // Without this, Unity keeps the tensor from before the CoM was moved, which
+        // produces wildly incorrect rotational behaviour.
+        rb.ResetInertiaTensor();
 
         Debug.Log("Recalculated boat mass: " + rb.mass + ", COM: " + rb.centerOfMass);
     }

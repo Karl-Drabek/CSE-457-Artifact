@@ -87,6 +87,9 @@ public class World : MonoBehaviour
         public Vector3 localEulerAngles;
         public Sprite compassIcon;
         public int bonusGold;
+        [Min(1f)] public float maxHealth;
+        [Tooltip("Scales collision damage applied equally to this obstacle and the boat. Uses the ObstacleHealth default when 0.")]
+        [Min(0f)] public float damagePerImpulseUnit;
     }
 
     [Serializable]
@@ -162,12 +165,14 @@ public class World : MonoBehaviour
         public float heightMultiplier;
         public float lengthMultiplier;
         public float influence01;
+        public float globalWaveScale;
 
-        public WaveDistanceProfile(float heightMultiplier, float lengthMultiplier, float influence01)
+        public WaveDistanceProfile(float heightMultiplier, float lengthMultiplier, float influence01, float globalWaveScale)
         {
             this.heightMultiplier = heightMultiplier;
             this.lengthMultiplier = lengthMultiplier;
             this.influence01 = influence01;
+            this.globalWaveScale = globalWaveScale;
         }
     }
 
@@ -253,6 +258,8 @@ public class World : MonoBehaviour
     Material waterMaterial;
 
     [Header("Water Surface")]
+    [Tooltip("Global amplitude multiplier applied to all waves. Set below 1 to reduce wave height at the start.")]
+    [SerializeField, Min(0f)] float startingWaveScale = 1f;
     [SerializeField] UrpLowPolyWater.GerstnerWave[] waterWaves =
     {
         new UrpLowPolyWater.GerstnerWave(new Vector2(1f, 0.35f), 0.35f, 4f, 1.25f, 0.35f),
@@ -310,6 +317,8 @@ public class World : MonoBehaviour
     [FormerlySerializedAs("interiorIcebergStartDistance")]
     [SerializeField] float interiorHazardStartDistance = 0f;
     [SerializeField] float hazardSpawnExclusionRadius = 32f;
+    [Tooltip("Hazards will not spawn within this radius of any objective obstacle's target position.")]
+    [SerializeField, Min(0f)] float objectiveSpawnExclusionRadius = 40f;
     [Header("Border Wall")]
     [SerializeField] bool renderBorderWall = true;
     [SerializeField] Material borderWallMaterial;
@@ -319,6 +328,8 @@ public class World : MonoBehaviour
     [SerializeField, Min(0f)] float borderWallTopNoiseHeight = 8f;
     [SerializeField, Min(0f)] float borderWallRadiusNoise = 10f;
     [SerializeField, Min(0.0001f)] float borderWallNoiseScale = 0.0035f;
+    [Tooltip("Total HP of the ice border wall before it can be broken through.")]
+    [SerializeField, Min(1f)] float borderWallMaxHealth = 500f;
 
     [Header("Open World Hazards")]
     [FormerlySerializedAs("icePrefabs")]
@@ -402,9 +413,31 @@ public class World : MonoBehaviour
     readonly GeneratedWorldStreamState editorPreviewState = new GeneratedWorldStreamState();
     readonly List<VoyageObstacle> spawnedObjectiveObstacles = new List<VoyageObstacle>();
     static readonly HashSet<string> destroyedObjectiveObstacleIds = new HashSet<string>(StringComparer.Ordinal);
+    // Persists remaining health of objectives across voyages so damage is cumulative.
+    static readonly Dictionary<string, float> persistedObstacleHealth = new Dictionary<string, float>(StringComparer.Ordinal);
     static int currentSpawnObjectiveIndex;
 
+    // Clear static state when starting play mode, even with domain reload disabled
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ClearStaticState()
+    {
+        destroyedObjectiveObstacleIds.Clear();
+        persistedObstacleHealth.Clear();
+        currentSpawnObjectiveIndex = 0;
+    }
+
+    /// <summary>Called by VoyageCycleController on fresh game start to guarantee static state is clean.</summary>
+    public static void ResetForNewGame()
+    {
+        destroyedObjectiveObstacleIds.Clear();
+        persistedObstacleHealth.Clear();
+        currentSpawnObjectiveIndex = 0;
+    }
+
     bool hasWon;
+    float borderWallCurrentHealth;
+    bool borderWallDestroyed;
+    readonly HashSet<string> runStartDestroyedIds = new HashSet<string>(StringComparer.Ordinal);
     float nextBoatSearchTime;
     bool suppressObstacleDestructionReporting;
     bool runtimeObjectiveObstacleSyncPending;
@@ -458,7 +491,10 @@ public class World : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            ClearObjectiveObstacles(false);
+            // Use immediate destroy so obstacles are removed while suppressObstacleDestructionReporting
+            // is still true. Deferred Destroy resets the flag before the objects actually die,
+            // causing scene-teardown destructions to pollute destroyedObjectiveObstacleIds.
+            ClearObjectiveObstacles(true);
             return;
         }
 
@@ -615,24 +651,79 @@ public class World : MonoBehaviour
             || candidate.root == boatRoot.root;
     }
 
-    public void HandleBorderCollision(GameObject borderIceberg, Transform collisionTransform)
+    // Called from OnCollisionEnter — full Collision lets us use contact points to find the right BoatPiece.
+    public void HandleBorderCollision(GameObject borderIceberg, Collision collision)
     {
-        if (hasWon || !IsBoatTransform(collisionTransform))
+        if (borderWallDestroyed || !IsBoatTransform(collision.transform)) return;
+
+        float collisionSpeed = collision.relativeVelocity.magnitude;
+        BoatPiece boatPiece = FindBoatPieceFromBorderCollision(collision);
+        if (boatPiece != null)
+            boatPiece.TakeDamage(Mathf.Max(5f, collisionSpeed * 3f));
+
+        ApplyDamageToBorderWall(collisionSpeed);
+    }
+
+    // Called from OnTriggerEnter (hazard icebergs near the border) — no contact points available.
+    public void HandleBorderCollision(GameObject borderIceberg, Transform collisionTransform, float collisionSpeed = 0f)
+    {
+        if (borderWallDestroyed || !IsBoatTransform(collisionTransform)) return;
+
+        BoatPiece boatPiece = collisionTransform.GetComponent<BoatPiece>()
+            ?? collisionTransform.GetComponentInParent<BoatPiece>();
+        if (boatPiece != null)
+            boatPiece.TakeDamage(Mathf.Max(5f, collisionSpeed * 3f));
+
+        ApplyDamageToBorderWall(collisionSpeed);
+    }
+
+    void ApplyDamageToBorderWall(float collisionSpeed)
+    {
+        borderWallCurrentHealth = Mathf.Max(0f, borderWallCurrentHealth - Mathf.Max(10f, collisionSpeed * 15f));
+        if (borderWallCurrentHealth <= 0f)
+            DestroyBorderWall();
+    }
+
+    static BoatPiece FindBoatPieceFromBorderCollision(Collision collision)
+    {
+        // collision.gameObject is the Rigidbody root for compound colliders, so
+        // GetComponentInParent won't find child BoatPieces — use contact point instead.
+        BoatPiece piece = collision.gameObject.GetComponentInParent<BoatPiece>();
+        if (piece != null) return piece;
+
+        if (collision.rigidbody != null && collision.contactCount > 0)
         {
-            return;
+            Vector3 contact = collision.GetContact(0).point;
+            BoatPiece[] all = collision.rigidbody.GetComponentsInChildren<BoatPiece>();
+            BoatPiece nearest = null;
+            float nearestSqr = float.MaxValue;
+            foreach (BoatPiece p in all)
+            {
+                float sqr = (p.transform.position - contact).sqrMagnitude;
+                if (sqr < nearestSqr) { nearestSqr = sqr; nearest = p; }
+            }
+            return nearest;
+        }
+        return null;
+    }
+
+    void DestroyBorderWall()
+    {
+        if (borderWallDestroyed) return;
+        borderWallDestroyed = true;
+
+        // Disable all border wall mesh colliders so the boat can sail through
+        foreach (GeneratedChunkState chunk in runtimeStreamState.generatedChunks.Values)
+        {
+            if (chunk.borderWallMeshCollider != null)
+                chunk.borderWallMeshCollider.enabled = false;
         }
 
-        if (!CanUseIceWallAsFinalObjective())
+        // Disable buoyancy so the boat sinks naturally past the edge
+        if (boatRoot != null)
         {
-            return;
-        }
-
-        hasWon = true;
-        Debug.Log("Victory: Boat reached the ice world border via " + borderIceberg.name + ".");
-
-        if (freezeTimeOnWin && Application.isPlaying)
-        {
-            Time.timeScale = 0f;
+            foreach (WaterBuoyancy wb in boatRoot.GetComponentsInChildren<WaterBuoyancy>(true))
+                wb.enabled = false;
         }
     }
 
@@ -734,7 +825,16 @@ public class World : MonoBehaviour
 
     public void ResetObstacleTargets()
     {
-        destroyedObjectiveObstacleIds.Clear();
+        // Snapshot which objectives were already defeated before this voyage starts
+        runStartDestroyedIds.Clear();
+        foreach (string id in destroyedObjectiveObstacleIds)
+            runStartDestroyedIds.Add(id);
+
+        // Reset ice wall health for the new voyage (but don't clear defeated obstacle IDs)
+        borderWallCurrentHealth = borderWallMaxHealth;
+        borderWallDestroyed = false;
+        hasWon = false;
+
         ResolveSceneReferences();
 
         if (Application.isPlaying)
@@ -769,6 +869,50 @@ public class World : MonoBehaviour
         }
 
         return destroyedCount;
+    }
+
+    /// <summary>Returns how many objectives were newly defeated this voyage (not already defeated before the run started).</summary>
+    public int GetNewlyDefeatedObstacleCount()
+    {
+        int count = 0;
+        foreach (string id in destroyedObjectiveObstacleIds)
+            if (!runStartDestroyedIds.Contains(id)) count++;
+        return count;
+    }
+
+    /// <summary>Sums bonus gold for objectives first defeated during this voyage.</summary>
+    public int GetNewlyDefeatedBonusGold()
+    {
+        int gold = 0;
+        for (int i = 0; i < obstacleTargets.Length; i++)
+        {
+            ObstacleTargetDefinition def = obstacleTargets[i];
+            if (!IsValidObstacleDefinition(def)) continue;
+            string id = GetObstacleId(i, def);
+            if (destroyedObjectiveObstacleIds.Contains(id) && !runStartDestroyedIds.Contains(id))
+                gold += def.bonusGold;
+        }
+        return gold;
+    }
+
+    /// <summary>Returns true if the objective at the given definition index was defeated for the first time this voyage.</summary>
+    public bool WasObjectiveNewlyDefeated(int definitionIndex)
+    {
+        if (definitionIndex < 0 || definitionIndex >= obstacleTargets.Length) return false;
+        ObstacleTargetDefinition def = obstacleTargets[definitionIndex];
+        if (!IsValidObstacleDefinition(def)) return false;
+        string id = GetObstacleId(definitionIndex, def);
+        return destroyedObjectiveObstacleIds.Contains(id) && !runStartDestroyedIds.Contains(id);
+    }
+
+    public float GetBorderWallHealthFraction()
+    {
+        return borderWallMaxHealth > 0f ? Mathf.Clamp01(borderWallCurrentHealth / borderWallMaxHealth) : 0f;
+    }
+
+    public float GetBorderWallMaxHealth()
+    {
+        return borderWallMaxHealth;
     }
 
     public int GetRemainingObstacleCount()
@@ -897,7 +1041,7 @@ public class World : MonoBehaviour
 
     bool CanUseIceWallAsFinalObjective()
     {
-        return !HasRemainingObstacles();
+        return !borderWallDestroyed;
     }
 
     bool TryGetIceWallTracking(
@@ -1009,7 +1153,8 @@ public class World : MonoBehaviour
         return new WaveDistanceProfile(
             Mathf.Max(1f, settings.maxWaveHeightMultiplier),
             Mathf.Max(1f, settings.maxWaveLengthMultiplier),
-            1f);
+            1f,
+            startingWaveScale);
     }
 
     WaveDistanceSettings GetActiveWaveDistanceSettings()
@@ -1047,7 +1192,8 @@ public class World : MonoBehaviour
         return new WaveDistanceProfile(
             Mathf.Lerp(1f, Mathf.Max(1f, settings.maxWaveHeightMultiplier), influence01),
             Mathf.Lerp(1f, Mathf.Max(1f, settings.maxWaveLengthMultiplier), influence01),
-            influence01);
+            influence01,
+            startingWaveScale);
     }
 
     float GetWaveDistanceInfluence01(Vector3 worldPosition, WaveDistanceSettings settings)
@@ -1142,24 +1288,24 @@ public class World : MonoBehaviour
 
         if (generatedObjectiveObstaclesRoot == null || obstacleTargets == null)
         {
+            // Root not ready yet (called before Start). Re-queue so Start can pick it up.
+            if (Application.isPlaying)
+                runtimeObjectiveObstacleSyncPending = true;
             return;
         }
 
         if (Application.isPlaying)
         {
-            // Only spawn the single current objective
-            int index = currentSpawnObjectiveIndex;
-            if (index >= 0 && index < obstacleTargets.Length)
+            // Spawn all objectives not yet defeated in any previous run.
+            // Always pass previewMode=false at runtime — 'immediate' only controls
+            // how old obstacles were destroyed, not whether new ones are in preview mode.
+            for (int i = 0; i < obstacleTargets.Length; i++)
             {
-                ObstacleTargetDefinition definition = obstacleTargets[index];
-                if (IsValidObstacleDefinition(definition))
-                {
-                    string obstacleId = GetObstacleId(index, definition);
-                    if (!destroyedObjectiveObstacleIds.Contains(obstacleId))
-                    {
-                        SpawnObjectiveObstacleInstance(definition, obstacleId, immediate, index);
-                    }
-                }
+                ObstacleTargetDefinition definition = obstacleTargets[i];
+                if (!IsValidObstacleDefinition(definition)) continue;
+                string obstacleId = GetObstacleId(i, definition);
+                if (!destroyedObjectiveObstacleIds.Contains(obstacleId))
+                    SpawnObjectiveObstacleInstance(definition, obstacleId, false, i);
             }
             return;
         }
@@ -1179,6 +1325,10 @@ public class World : MonoBehaviour
 
     void ClearObjectiveObstacles(bool immediate)
     {
+        // Persist any remaining health before destroying, so damage carries over to the next voyage.
+        if (Application.isPlaying)
+            SaveObstacleHealthState();
+
         spawnedObjectiveObstacles.Clear();
 
         Transform obstacleRoot = generatedObjectiveObstaclesRoot != null
@@ -1200,6 +1350,17 @@ public class World : MonoBehaviour
         finally
         {
             suppressObstacleDestructionReporting = false;
+        }
+    }
+
+    void SaveObstacleHealthState()
+    {
+        foreach (VoyageObstacle obstacle in spawnedObjectiveObstacles)
+        {
+            if (obstacle == null || string.IsNullOrEmpty(obstacle.ObstacleId)) continue;
+            ObstacleHealth oh = obstacle.GetComponent<ObstacleHealth>();
+            if (oh != null)
+                persistedObstacleHealth[obstacle.ObstacleId] = oh.CurrentHealth;
         }
     }
 
@@ -1230,6 +1391,30 @@ public class World : MonoBehaviour
 
         obstacle.Configure(this, obstacleId, GetObstacleDisplayName(definitionIndex, definition), definition.compassIcon);
         RegisterObjectiveObstacle(obstacle);
+
+        // Add health — use definition value if non-zero, otherwise leave prefab's default
+        if (!previewMode && definition.maxHealth > 0f)
+        {
+            ObstacleHealth health = obstacleObject.GetComponent<ObstacleHealth>();
+            if (health == null)
+                health = obstacleObject.AddComponent<ObstacleHealth>();
+            health.Configure(definition.maxHealth, definition.damagePerImpulseUnit);
+
+            // Restore health from a previous voyage if the obstacle was already damaged.
+            if (persistedObstacleHealth.TryGetValue(obstacleId, out float savedHealth))
+                health.SetCurrentHealth(savedHealth);
+
+            // OnCollisionEnter only fires on the Rigidbody owner, not on child colliders.
+            // Add a kinematic Rigidbody to the root so ObstacleHealth.OnCollisionEnter
+            // is reached when the boat hits any child mesh. Skip if the prefab already
+            // has one (e.g. a floating obstacle with non-kinematic + WaterBuoyancy).
+            if (obstacleObject.GetComponent<Rigidbody>() == null)
+            {
+                Rigidbody rb = obstacleObject.AddComponent<Rigidbody>();
+                rb.isKinematic = true;
+                rb.useGravity = false;
+            }
+        }
     }
 
     void EnsureObjectiveObstacleRuntimeComponents(GameObject obstacleObject)
@@ -1295,9 +1480,19 @@ public class World : MonoBehaviour
             return;
         }
 
+        // Only record a defeat while a voyage is actually in progress.
+        // Prevents scene-teardown or spawn-time collisions from falsely marking objectives complete.
         if (!string.IsNullOrEmpty(obstacle.ObstacleId))
         {
-            destroyedObjectiveObstacleIds.Add(obstacle.ObstacleId);
+            if (VoyageCycleController.IsVoyageActive)
+            {
+                destroyedObjectiveObstacleIds.Add(obstacle.ObstacleId);
+                Debug.Log($"[World] Objective defeated during voyage: '{obstacle.ObstacleId}'");
+            }
+            else
+            {
+                Debug.Log($"[World] Objective destroyed outside voyage (suppressed): '{obstacle.ObstacleId}'");
+            }
         }
 
         UnregisterObjectiveObstacle(obstacle);
@@ -1670,7 +1865,10 @@ public class World : MonoBehaviour
 
         runtimeObjectiveObstacleSyncPending = false;
         ResolveSceneReferences();
-        SyncObjectiveObstacles(false);
+        // Always use immediate destroy at runtime. Deferred Destroy resets
+        // suppressObstacleDestructionReporting before OnDestroy fires, causing
+        // cleared obstacles to be falsely recorded as defeated.
+        SyncObjectiveObstacles(true);
     }
 
 #if UNITY_EDITOR
@@ -2376,7 +2574,7 @@ public class World : MonoBehaviour
             whitecapCreaseBlendAngle,
             whitecapStrength,
             chunk.waterSourceMesh,
-            true);
+            false); // ocean waves extend everywhere — analytic fallback must be allowed at borders
     }
 
     void BuildChunkWaterSourceMesh(
@@ -3168,6 +3366,11 @@ public class World : MonoBehaviour
                 continue;
             }
 
+            if (IsNearObjectiveSpawnPosition(hazardPosition))
+            {
+                continue;
+            }
+
             if (!PassesSpacing(hazardPosition, acceptedPositions, minSpacing))
             {
                 continue;
@@ -3334,6 +3537,11 @@ public class World : MonoBehaviour
             }
 
             if (IsInsideHazardSpawnExclusion(floatingPosition, settings, spawnPoint, spawnPointCaptured))
+            {
+                continue;
+            }
+
+            if (IsNearObjectiveSpawnPosition(floatingPosition))
             {
                 continue;
             }
@@ -3913,6 +4121,27 @@ public class World : MonoBehaviour
         return offset.sqrMagnitude < safeRadius * safeRadius;
     }
 
+    bool IsNearObjectiveSpawnPosition(Vector3 worldPosition)
+    {
+        if (obstacleTargets == null || objectiveSpawnExclusionRadius <= 0f)
+            return false;
+
+        float sqr = objectiveSpawnExclusionRadius * objectiveSpawnExclusionRadius;
+        Transform root = generatedObjectiveObstaclesRoot != null
+            ? generatedObjectiveObstaclesRoot
+            : transform;
+
+        foreach (ObstacleTargetDefinition def in obstacleTargets)
+        {
+            if (!IsValidObstacleDefinition(def)) continue;
+            Vector3 objWorld = root.TransformPoint(def.localPosition);
+            float dx = worldPosition.x - objWorld.x;
+            float dz = worldPosition.z - objWorld.z;
+            if (dx * dx + dz * dz < sqr) return true;
+        }
+        return false;
+    }
+
     HazardBiome GetInteriorHazardBiome(
         Vector3 worldPosition,
         OpenWorldSettings settings,
@@ -4400,6 +4629,9 @@ public class World : MonoBehaviour
                 hash = (hash * 31) + waves[i].waveLength.GetHashCode();
                 hash = (hash * 31) + waves[i].speed.GetHashCode();
                 hash = (hash * 31) + waves[i].steepness.GetHashCode();
+                hash = (hash * 31) + waves[i].minActiveDistance.GetHashCode();
+                hash = (hash * 31) + waves[i].maxActiveDistance.GetHashCode();
+                hash = (hash * 31) + waves[i].attenuationRange.GetHashCode();
             }
 
             return hash;

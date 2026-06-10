@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3bace6dae5a29904b81058dbe60a20fc, type: 3}
   m_Name: LongMastDefinition
   m_EditorClassIdentifier: Assembly-CSharp::ShipPartDefinition
-  displayName: 
-  partType: 0
+  displayName: Grand Mast
+  partType: 1
   prefab: {fileID: 1704195015244371409, guid: c8f8a2af1aee6fc4bb88e8ff8efeab1f, type: 3}
   icon: {fileID: 0}
   material: {fileID: 2100000, guid: 8bd1444246f1e76448d90123474ea25a, type: 2}

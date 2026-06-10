@@ -31,14 +31,14 @@ Material:
     m_Ints: []
     m_Floats:
     - _Alpha: 1
-    - _FoamStrength: 0.48
+    - _FoamStrength: 0.42
     - _FoamTiling: 0.08
-    - _FresnelPower: 0.77
+    - _FresnelPower: 8
     - _IntersectionFoamDistance: 0.25
     - _IntersectionFoamStrength: 2
-    - _RimStrength: 0.16
-    - _Smoothness: 0.521
-    - _SpecularStrength: 0.19
+    - _RimStrength: 2
+    - _Smoothness: 0.47
+    - _SpecularStrength: 0.5
     m_Colors:
     - _BaseColor: {r: 0.37208048, g: 0.7794238, b: 0.8161765, a: 1}
     - _FoamColor: {r: 1, g: 1, b: 1, a: 1}

@@ -25,18 +25,13 @@ public class VoyageObstacle : MonoBehaviour
         destructionReported = false;
     }
 
+    /// <summary>
+    /// Records this obstacle as defeated and immediately destroys the GameObject.
+    /// Use when no death animation is needed.
+    /// </summary>
     public void DestroyObstacle()
     {
-        if (destructionReported)
-        {
-            return;
-        }
-
-        if (owner != null)
-        {
-            owner.HandleObjectiveObstacleDestroyed(this);
-            destructionReported = true;
-        }
+        ReportDefeated();
 
         if (Application.isPlaying)
         {
@@ -45,6 +40,20 @@ public class VoyageObstacle : MonoBehaviour
         else
         {
             DestroyImmediate(gameObject);
+        }
+    }
+
+    /// <summary>
+    /// Records this obstacle as defeated without destroying the GameObject.
+    /// Use when a death animation (e.g. sinking) will handle the final Destroy.
+    /// </summary>
+    public void ReportDefeated()
+    {
+        if (destructionReported) return;
+        if (owner != null)
+        {
+            owner.HandleObjectiveObstacleDestroyed(this);
+            destructionReported = true;
         }
     }
 
