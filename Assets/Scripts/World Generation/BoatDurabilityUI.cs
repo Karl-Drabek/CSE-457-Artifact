@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class BoatDurabilityUI : MonoBehaviour
 {
@@ -18,7 +19,14 @@ public class BoatDurabilityUI : MonoBehaviour
     [Header("Broken Display")]
     [SerializeField] private float brokenDisplaySeconds = 2f;
 
+    [Header("Root Hull Game Over")]
+    [SerializeField] private string shipBuildingSceneName = "ShipBuilding";
+    [SerializeField] private float returnToBuilderDelay = 2f;
+    [SerializeField] private string boatParentObjectName = "BoatParent";
+
     private float nextRefreshTime;
+    private bool isReturningToBuilder = false;
+
     private readonly StringBuilder builder = new StringBuilder();
 
     private class PieceUIInfo
@@ -32,7 +40,7 @@ public class BoatDurabilityUI : MonoBehaviour
 
     private readonly Dictionary<int, PieceUIInfo> pieceInfos = new Dictionary<int, PieceUIInfo>();
 
-    void Update()
+    private void Update()
     {
         if (Time.time < nextRefreshTime)
         {
@@ -43,7 +51,7 @@ public class BoatDurabilityUI : MonoBehaviour
         RefreshDurabilityList();
     }
 
-    void RefreshDurabilityList()
+    private void RefreshDurabilityList()
     {
         if (durabilityText == null)
         {
@@ -51,20 +59,52 @@ public class BoatDurabilityUI : MonoBehaviour
         }
 
         BoatPiece[] pieces = FindObjectsByType<BoatPiece>(FindObjectsSortMode.None);
-        Dictionary<string, int> nameCounts = new Dictionary<string, int>();
-        HashSet<int> seenThisFrame = new HashSet<int>();
+
+        List<BoatPiece> sortedPieces = new List<BoatPiece>();
 
         foreach (BoatPiece piece in pieces)
         {
-            if (piece == null)
+            if (piece != null)
             {
-                continue;
+                sortedPieces.Add(piece);
+            }
+        }
+
+        sortedPieces.Sort((a, b) =>
+        {
+            string aName = CleanName(a.gameObject.name);
+            string bName = CleanName(b.gameObject.name);
+
+            int aPriority = GetPartPriority(aName);
+            int bPriority = GetPartPriority(bName);
+
+            if (aPriority != bPriority)
+            {
+                return aPriority.CompareTo(bPriority);
             }
 
-            int id = piece.GetInstanceID();
-            seenThisFrame.Add(id);
+            int nameCompare = string.Compare(aName, bName, System.StringComparison.Ordinal);
 
-            string baseName = piece.gameObject.name.Replace("(Clone)", "").Trim();
+            if (nameCompare != 0)
+            {
+                return nameCompare;
+            }
+
+            return a.GetInstanceID().CompareTo(b.GetInstanceID());
+        });
+
+        Dictionary<string, int> nameCounts = new Dictionary<string, int>();
+        HashSet<int> seenThisFrame = new HashSet<int>();
+        List<int> displayOrder = new List<int>();
+
+        foreach (BoatPiece piece in sortedPieces)
+        {
+            int id = piece.GetInstanceID();
+
+            seenThisFrame.Add(id);
+            displayOrder.Add(id);
+
+            string baseName = CleanName(piece.gameObject.name);
 
             if (!nameCounts.ContainsKey(baseName))
             {
@@ -90,6 +130,12 @@ public class BoatDurabilityUI : MonoBehaviour
             if (piece.isBroken && info.brokenTime < 0f)
             {
                 info.brokenTime = Time.time;
+            }
+
+            if (piece.isRootHull && piece.isBroken && !isReturningToBuilder)
+            {
+                isReturningToBuilder = true;
+                Invoke(nameof(ReturnToShipBuilder), returnToBuilderDelay);
             }
         }
 
@@ -119,6 +165,11 @@ public class BoatDurabilityUI : MonoBehaviour
             pieceInfos.Remove(id);
         }
 
+        BuildDurabilityText(displayOrder);
+    }
+
+    private void BuildDurabilityText(List<int> displayOrder)
+    {
         builder.Clear();
         builder.AppendLine("<b>Boat Durability</b>");
 
@@ -131,8 +182,15 @@ public class BoatDurabilityUI : MonoBehaviour
 
         List<string> lines = new List<string>();
 
-        foreach (PieceUIInfo info in pieceInfos.Values)
+        foreach (int id in displayOrder)
         {
+            if (!pieceInfos.ContainsKey(id))
+            {
+                continue;
+            }
+
+            PieceUIInfo info = pieceInfos[id];
+
             string line;
 
             if (info.isBroken)
@@ -193,7 +251,46 @@ public class BoatDurabilityUI : MonoBehaviour
         durabilityText.text = builder.ToString();
     }
 
-    string PadRichTextLine(string text, int width)
+    private int GetPartPriority(string partName)
+    {
+        string lowerName = partName.ToLower();
+
+        if (lowerName.Contains("hull") || lowerName.Contains("raft"))
+        {
+            return 0;
+        }
+
+        if (lowerName.Contains("mast"))
+        {
+            return 1;
+        }
+
+        if (lowerName.Contains("sail"))
+        {
+            return 2;
+        }
+
+        return 3;
+    }
+
+    private string CleanName(string objectName)
+    {
+        return objectName.Replace("(Clone)", "").Trim();
+    }
+
+    private void ReturnToShipBuilder()
+    {
+        GameObject boatParent = GameObject.Find(boatParentObjectName);
+
+        if (boatParent != null)
+        {
+            Destroy(boatParent);
+        }
+
+        SceneManager.LoadScene(shipBuildingSceneName, LoadSceneMode.Single);
+    }
+
+    private string PadRichTextLine(string text, int width)
     {
         string plainText = RemoveRichTextTags(text);
         int paddingNeeded = Mathf.Max(1, width - plainText.Length);
@@ -201,7 +298,7 @@ public class BoatDurabilityUI : MonoBehaviour
         return text + new string(' ', paddingNeeded);
     }
 
-    string RemoveRichTextTags(string text)
+    private string RemoveRichTextTags(string text)
     {
         bool insideTag = false;
         StringBuilder plain = new StringBuilder();

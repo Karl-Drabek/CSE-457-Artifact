@@ -25,6 +25,9 @@ public class BoatPiece : MonoBehaviour
     public float pieceMass = 1f;
     public Vector3 localCenterOfMass = Vector3.zero;
 
+    [Header("Gold Cost")]
+    public int goldCost = 10;
+
     private void Awake()
     {
         currentDurability = maxDurability;
