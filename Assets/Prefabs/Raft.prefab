@@ -161,7 +161,7 @@ MonoBehaviour:
   childPieces: []
   isRootHull: 1
   isBroken: 0
-  maxDurability: 100
+  maxDurability: 300
   currentDurability: 0
   breakForce: 2
   destroyAfterBreakingSeconds: 3
