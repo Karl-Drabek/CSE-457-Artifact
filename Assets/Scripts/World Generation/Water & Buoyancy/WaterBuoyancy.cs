@@ -162,6 +162,12 @@ public class WaterBuoyancy : MonoBehaviour
         RefreshState();
     }
 
+    void Start()
+    {
+        Physics.SyncTransforms();
+        RefreshAutoSamplePoints();
+    }
+
     void OnEnable()
     {
         RefreshState();

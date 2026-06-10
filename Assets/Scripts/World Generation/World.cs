@@ -317,6 +317,8 @@ public class World : MonoBehaviour
     [FormerlySerializedAs("interiorIcebergStartDistance")]
     [SerializeField] float interiorHazardStartDistance = 0f;
     [SerializeField] float hazardSpawnExclusionRadius = 32f;
+    [Tooltip("Hazards will not spawn within this radius of any objective obstacle's target position.")]
+    [SerializeField, Min(0f)] float objectiveSpawnExclusionRadius = 40f;
     [Header("Border Wall")]
     [SerializeField] bool renderBorderWall = true;
     [SerializeField] Material borderWallMaterial;
@@ -3364,6 +3366,11 @@ public class World : MonoBehaviour
                 continue;
             }
 
+            if (IsNearObjectiveSpawnPosition(hazardPosition))
+            {
+                continue;
+            }
+
             if (!PassesSpacing(hazardPosition, acceptedPositions, minSpacing))
             {
                 continue;
@@ -3530,6 +3537,11 @@ public class World : MonoBehaviour
             }
 
             if (IsInsideHazardSpawnExclusion(floatingPosition, settings, spawnPoint, spawnPointCaptured))
+            {
+                continue;
+            }
+
+            if (IsNearObjectiveSpawnPosition(floatingPosition))
             {
                 continue;
             }
@@ -4107,6 +4119,27 @@ public class World : MonoBehaviour
             worldPosition.z - spawnPoint.z);
         float safeRadius = Mathf.Max(0f, settings.hazardSpawnExclusionRadius);
         return offset.sqrMagnitude < safeRadius * safeRadius;
+    }
+
+    bool IsNearObjectiveSpawnPosition(Vector3 worldPosition)
+    {
+        if (obstacleTargets == null || objectiveSpawnExclusionRadius <= 0f)
+            return false;
+
+        float sqr = objectiveSpawnExclusionRadius * objectiveSpawnExclusionRadius;
+        Transform root = generatedObjectiveObstaclesRoot != null
+            ? generatedObjectiveObstaclesRoot
+            : transform;
+
+        foreach (ObstacleTargetDefinition def in obstacleTargets)
+        {
+            if (!IsValidObstacleDefinition(def)) continue;
+            Vector3 objWorld = root.TransformPoint(def.localPosition);
+            float dx = worldPosition.x - objWorld.x;
+            float dz = worldPosition.z - objWorld.z;
+            if (dx * dx + dz * dz < sqr) return true;
+        }
+        return false;
     }
 
     HazardBiome GetInteriorHazardBiome(
