@@ -649,6 +649,20 @@ public class World : MonoBehaviour
             || candidate.root == boatRoot.root;
     }
 
+    // Called from OnCollisionEnter — full Collision lets us use contact points to find the right BoatPiece.
+    public void HandleBorderCollision(GameObject borderIceberg, Collision collision)
+    {
+        if (borderWallDestroyed || !IsBoatTransform(collision.transform)) return;
+
+        float collisionSpeed = collision.relativeVelocity.magnitude;
+        BoatPiece boatPiece = FindBoatPieceFromBorderCollision(collision);
+        if (boatPiece != null)
+            boatPiece.TakeDamage(Mathf.Max(5f, collisionSpeed * 3f));
+
+        ApplyDamageToBorderWall(collisionSpeed);
+    }
+
+    // Called from OnTriggerEnter (hazard icebergs near the border) — no contact points available.
     public void HandleBorderCollision(GameObject borderIceberg, Transform collisionTransform, float collisionSpeed = 0f)
     {
         if (borderWallDestroyed || !IsBoatTransform(collisionTransform)) return;
@@ -658,9 +672,37 @@ public class World : MonoBehaviour
         if (boatPiece != null)
             boatPiece.TakeDamage(Mathf.Max(5f, collisionSpeed * 3f));
 
+        ApplyDamageToBorderWall(collisionSpeed);
+    }
+
+    void ApplyDamageToBorderWall(float collisionSpeed)
+    {
         borderWallCurrentHealth = Mathf.Max(0f, borderWallCurrentHealth - Mathf.Max(10f, collisionSpeed * 15f));
         if (borderWallCurrentHealth <= 0f)
             DestroyBorderWall();
+    }
+
+    static BoatPiece FindBoatPieceFromBorderCollision(Collision collision)
+    {
+        // collision.gameObject is the Rigidbody root for compound colliders, so
+        // GetComponentInParent won't find child BoatPieces — use contact point instead.
+        BoatPiece piece = collision.gameObject.GetComponentInParent<BoatPiece>();
+        if (piece != null) return piece;
+
+        if (collision.rigidbody != null && collision.contactCount > 0)
+        {
+            Vector3 contact = collision.GetContact(0).point;
+            BoatPiece[] all = collision.rigidbody.GetComponentsInChildren<BoatPiece>();
+            BoatPiece nearest = null;
+            float nearestSqr = float.MaxValue;
+            foreach (BoatPiece p in all)
+            {
+                float sqr = (p.transform.position - contact).sqrMagnitude;
+                if (sqr < nearestSqr) { nearestSqr = sqr; nearest = p; }
+            }
+            return nearest;
+        }
+        return null;
     }
 
     void DestroyBorderWall()
