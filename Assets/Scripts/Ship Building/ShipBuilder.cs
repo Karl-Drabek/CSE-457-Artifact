@@ -243,8 +243,8 @@ public class ShipBuilder : MonoBehaviour
         }
 
         SetUpPart(obj);
-        selectedPart = null;
-        DestroyPreview();
+        //selectedPart = null;
+        //DestroyPreview();
         UpdateSnapPointVisibility();
     }
 
