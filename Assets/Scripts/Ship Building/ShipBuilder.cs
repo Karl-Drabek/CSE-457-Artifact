@@ -6,6 +6,7 @@ using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using Borodar.FarlandSkies.LowPoly;
 
 /// <summary>
 /// Main ship-building controller used by the ShipBuilding scene.
@@ -546,8 +547,23 @@ public class ShipBuilder : MonoBehaviour
 
     IEnumerator LoadSailSceneAndTransferBoat()
     {
+        // Destroy the skybox that was persisted from the sail scene (DontDestroyOnLoad)
+        // so we don't end up with two skyboxes when the sail scene loads its own.
+        GameObject persistedSkybox = GameObject.FindWithTag("Skybox");
+        if (persistedSkybox != null && persistedSkybox.scene.name == "DontDestroyOnLoad")
+        {
+            Destroy(persistedSkybox);
+        }
+
         // Prepare and persist the boat before any scene changes.
         MakeBoatPersistent();
+
+        // Reset the skybox cycle manager so it starts fresh in the sail scene.
+        if (TryGetCycleManager(out SkyboxCycleManager cycleManager))
+        {
+            cycleManager.CycleProgress = 24f;
+            cycleManager.Paused = false;
+        }
 
         AsyncOperation operation = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
         yield return operation;
@@ -648,6 +664,12 @@ public class ShipBuilder : MonoBehaviour
         {
             shipRoot.gameObject.AddComponent<ShipController>();
         }
+    }
+
+    static bool TryGetCycleManager(out SkyboxCycleManager cycleManager)
+    {
+        cycleManager = FindAnyObjectByType<SkyboxCycleManager>();
+        return cycleManager != null;
     }
 
     static bool IsPointerOverUi()

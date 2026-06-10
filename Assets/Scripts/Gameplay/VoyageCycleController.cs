@@ -187,6 +187,7 @@ public class VoyageCycleController : MonoBehaviour
     public bool VoyageHasEnded => state.phase == VoyagePhase.VoyageComplete;
     /// <summary>Static check — usable without an instance reference (state is static).</summary>
     public static bool IsVoyageActive => stateInitialized && state.phase == VoyagePhase.Sailing;
+    static GameObject cachedSkybox = null;
 
     void Awake()
     {
@@ -524,6 +525,13 @@ public class VoyageCycleController : MonoBehaviour
         state.phase = VoyagePhase.EditingShip;
         state.previousTimeOfDay = homeTimeOfDay;
         ApplyHomeTimeAndPause();
+
+        GameObject skybox = GameObject.FindWithTag("Skybox");
+        if (skybox != null)
+        {
+            DontDestroyOnLoad(skybox);
+            cachedSkybox = skybox;
+        }
 
         // Make the current boat persist through the scene load so the builder can adopt it.
         if (TryGetBoatRoot(out Transform boatRoot))
