@@ -38,7 +38,7 @@ public class ShipBuilder : MonoBehaviour
     bool hullPlaced;
     Vector3[] buoyancy_vertices = { };
     Vector3 hull_base_point = Vector3.zero;
-    float hull_local_height = 0f;
+    Vector3 hull_top_point = Vector3.zero;
     const string VISUAL = "VisualComponent";
 
     void Awake()
@@ -48,18 +48,27 @@ public class ShipBuilder : MonoBehaviour
             selectionPanel.SetActive(false);
         }
 
-        // If a persistent boat already exists (player returned from sailing), adopt it.
+        // If a persistent boat already exists (player returned from sailing), adopt it —
+        // but only if it still has a BoatMassManager (hull intact). If the hull broke,
+        // BoatMassManager was removed; treat that remnant as destroyed and start fresh.
         GameObject existingBoat = GameObject.Find("BoatParent");
         if (existingBoat != null && existingBoat.transform != shipRoot)
         {
-            shipRoot = existingBoat.transform;
-            hullPlaced = true;
-
-            // Freeze physics while editing — PrepareBoatForSailing will undo this on save.
-            Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
-            if (adoptedBody != null)
+            if (existingBoat.GetComponent<BoatMassManager>() != null)
             {
-                adoptedBody.isKinematic = true;
+                shipRoot = existingBoat.transform;
+                hullPlaced = true;
+
+                Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
+                if (adoptedBody != null)
+                {
+                    adoptedBody.isKinematic = true;
+                }
+            }
+            else
+            {
+                // Hull was destroyed — clean up the rootless remnant so it doesn't linger.
+                Destroy(existingBoat);
             }
         }
     }
@@ -471,7 +480,7 @@ public class ShipBuilder : MonoBehaviour
 
         buoyancy_vertices = worldPointsOnHull.ToArray();
         hull_base_point = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.min);
-        hull_local_height = meshFilter.sharedMesh.bounds.max.y * meshTransform.localScale.y;
+        hull_top_point  = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.max);
     }
 
     // Transform the hull points to root space and assign as manual buoyancy sample points.
@@ -488,7 +497,9 @@ public class ShipBuilder : MonoBehaviour
         }
 
         hull_base_point = buoyancy.transform.InverseTransformPoint(hull_base_point);
-        buoyancy.hull_height = hull_local_height;
+        // Convert the world-space hull top into the buoyancy root's local space so
+        // hull_height matches the same coordinate frame as the sample points.
+        buoyancy.hull_height = buoyancy.transform.InverseTransformPoint(hull_top_point).y;
         buoyancy.SetManualPoints(buoyancy_vertices, hull_base_point.y);
     }
 

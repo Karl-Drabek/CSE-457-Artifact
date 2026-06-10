@@ -26,9 +26,22 @@ public class BoatFollowCamera : MonoBehaviour
 
     Vector3 followVelocity;
     Transform previousTarget;
+    bool frozen;
+
+    /// <summary>Lock the camera in place — stops following the target until Unfreeze is called.</summary>
+    public void Freeze() => frozen = true;
+
+    /// <summary>Resume following the target.</summary>
+    public void Unfreeze()
+    {
+        frozen = false;
+        previousTarget = null; // force snap-free resume
+    }
 
     void LateUpdate()
     {
+        if (frozen) return;
+
         if (target == null)
         {
             previousTarget = null;

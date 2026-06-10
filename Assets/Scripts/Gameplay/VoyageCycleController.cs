@@ -58,6 +58,8 @@ public class VoyageCycleController : MonoBehaviour
     {
         public int dayNumber;
         public int gold;
+        public int goldSpent;
+        public float totalDistanceSailed;
         public int lastVoyageReward;
         public int lastVoyageBonusGold;
         public float lastVoyageMaxDistance;
@@ -90,6 +92,18 @@ public class VoyageCycleController : MonoBehaviour
 
     static bool stateInitialized;
     static VoyageState state;
+
+    bool boatSinkingStarted;
+    ShipController sinkingShipController;
+
+    // Reset static state when entering play mode so a new game always starts clean,
+    // even when domain reload is disabled in project settings.
+    [UnityEngine.RuntimeInitializeOnLoadMethod(UnityEngine.RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ClearStaticStateOnPlay()
+    {
+        stateInitialized = false;
+        state = default;
+    }
 
     [Header("Scenes")]
     [SerializeField] string homeSceneName = "SampleScene";
@@ -164,11 +178,15 @@ public class VoyageCycleController : MonoBehaviour
 
     public int DayNumber => state.dayNumber;
     public int Gold => state.gold;
+    public int GoldSpent => state.goldSpent;
+    public float TotalDistanceSailed => state.totalDistanceSailed;
     public int LastVoyageReward => state.lastVoyageReward;
     public float LastVoyageMaxDistance => state.lastVoyageMaxDistance;
     public float TimeOfDay => GetTimeOfDay();
     public bool VoyageInProgress => state.phase == VoyagePhase.Sailing;
     public bool VoyageHasEnded => state.phase == VoyagePhase.VoyageComplete;
+    /// <summary>Static check — usable without an instance reference (state is static).</summary>
+    public static bool IsVoyageActive => stateInitialized && state.phase == VoyagePhase.Sailing;
 
     void Awake()
     {
@@ -180,6 +198,7 @@ public class VoyageCycleController : MonoBehaviour
     {
         EnsureStateInitialized();
         SceneManager.sceneLoaded += HandleSceneLoaded;
+        BoatPiece.OnHullBroken += HandleHullBroken;
         ApplyStateToCurrentScene();
         RefreshBoundUi();
     }
@@ -187,6 +206,7 @@ public class VoyageCycleController : MonoBehaviour
     void OnDisable()
     {
         SceneManager.sceneLoaded -= HandleSceneLoaded;
+        BoatPiece.OnHullBroken -= HandleHullBroken;
         ReleaseBoatMovementLock();
     }
 
@@ -565,6 +585,8 @@ public class VoyageCycleController : MonoBehaviour
         state.needsInitialDistanceCapture = true;
         state.previousTimeOfDay = voyageStartTimeOfDay;
 
+        boatSinkingStarted = false;
+        sinkingShipController = null;
         PrepareBoatForVoyageStart();
         ApplyVoyageStartTimeAndUnpause(resetTimeOfDay: true);
         TryResetObstaclesForVoyage();
@@ -587,6 +609,8 @@ public class VoyageCycleController : MonoBehaviour
             state.dayNumber += 1;
         }
 
+        EndBoatSinking();
+
         state.homeUiUnlocked = true;
         EnterHomeState();
 
@@ -608,6 +632,28 @@ public class VoyageCycleController : MonoBehaviour
     {
         ApplyStateToCurrentScene();
         RefreshBoundUi();
+    }
+
+    void HandleHullBroken()
+    {
+        if (state.phase != VoyagePhase.Sailing)
+        {
+            return;
+        }
+
+        // Remove BoatMassManager so HasBuiltBoat() immediately returns false.
+        // This disables the Set Sail button and prevents the ship builder from
+        // re-adopting the hollow remnant as a valid built boat.
+        if (TryGetBoatRoot(out Transform boatRoot))
+        {
+            BoatMassManager massManager = boatRoot.GetComponent<BoatMassManager>();
+            if (massManager != null)
+            {
+                Destroy(massManager);
+            }
+        }
+
+        CompleteVoyageDay();
     }
 
     void ApplyStateToCurrentScene()
@@ -695,38 +741,39 @@ public class VoyageCycleController : MonoBehaviour
 
         state.phase = VoyagePhase.VoyageComplete;
 
-        // Capture the objective name before potentially advancing the index
-        if (World.Instance != null && World.Instance.TryGetObjectiveDefinition(state.currentObjectiveIndex, out World.ObstacleTargetDefinition objectiveDef))
+        // Capture a summary name from any newly defeated objective this voyage
+        int newlyDefeated = World.Instance != null ? World.Instance.GetNewlyDefeatedObstacleCount() : 0;
+        state.lastVoyageObjectiveName = string.Empty;
+        if (newlyDefeated > 0 && World.Instance != null)
         {
-            state.lastVoyageObjectiveName = !string.IsNullOrWhiteSpace(objectiveDef.displayName)
-                ? objectiveDef.displayName.Trim()
-                : "Objective " + (state.currentObjectiveIndex + 1);
-        }
-        else
-        {
-            state.lastVoyageObjectiveName = string.Empty;
+            // Use the name of the first newly-defeated objective as the display name
+            for (int i = 0; i < World.Instance.GetConfiguredObstacleCount(); i++)
+            {
+                if (World.Instance.TryGetObjectiveDefinition(i, out World.ObstacleTargetDefinition def)
+                    && World.Instance.WasObjectiveNewlyDefeated(i))
+                {
+                    state.lastVoyageObjectiveName = !string.IsNullOrWhiteSpace(def.displayName)
+                        ? def.displayName.Trim()
+                        : "Objective " + (i + 1);
+                    break;
+                }
+            }
         }
 
-        state.lastVoyageDestroyedObstacleCount = GetDestroyedObstacleCount();
+        state.lastVoyageDestroyedObstacleCount = newlyDefeated;
         state.lastVoyageConfiguredObstacleCount = GetConfiguredObstacleCount();
-        bool objectiveCompleted = state.lastVoyageDestroyedObstacleCount > 0;
+        bool objectiveCompleted = newlyDefeated > 0;
         state.lastVoyageObjectiveCompleted = objectiveCompleted;
 
         int distanceGold = Mathf.Max(0, Mathf.RoundToInt(state.lastVoyageMaxDistance * goldPerDistanceUnit));
-        int bonusGold = 0;
-        if (objectiveCompleted && World.Instance != null
-            && World.Instance.TryGetObjectiveDefinition(state.currentObjectiveIndex, out World.ObstacleTargetDefinition bonusDef))
-        {
-            bonusGold = Mathf.Max(0, bonusDef.bonusGold);
-        }
+        int bonusGold = World.Instance != null ? World.Instance.GetNewlyDefeatedBonusGold() : 0;
         state.lastVoyageBonusGold = bonusGold;
         state.lastVoyageReward = distanceGold + bonusGold;
         state.gold += state.lastVoyageReward;
+        state.totalDistanceSailed += state.lastVoyageMaxDistance;
 
-        if (objectiveCompleted)
-        {
-            state.currentObjectiveIndex++;
-        }
+        Debug.Log($"[VCC] Day complete — dist={state.lastVoyageMaxDistance:F1}m × {goldPerDistanceUnit}={distanceGold}g | bonus={bonusGold}g ({newlyDefeated} newly defeated) | total={state.lastVoyageReward}g");
+
         state.previousTimeOfDay = voyageEndTimeOfDay;
 
         if (autoReturnHomeWhenVoyageEnds && !HasDayOverDisplayAvailable())
@@ -747,6 +794,10 @@ public class VoyageCycleController : MonoBehaviour
     /// </summary>
     public static void SetPhaseToHome()
     {
+        // Mark initialized so EnsureStateInitialized() on the next scene's Awake
+        // does not reset state (and lose homeUiUnlocked) when no VCC existed in the
+        // builder scene to call EnsureStateInitialized() first.
+        stateInitialized = true;
         state.phase = VoyagePhase.Home;
         state.homeUiUnlocked = true;
         state.homePoseCaptured = false;
@@ -761,6 +812,7 @@ public class VoyageCycleController : MonoBehaviour
     void EnterHomeState()
     {
         state.phase = VoyagePhase.Home;
+        state.homeUiUnlocked = true;
         state.previousTimeOfDay = homeTimeOfDay;
         ApplyHomeTimeAndPause();
         RefreshBoundUi();
@@ -793,6 +845,9 @@ public class VoyageCycleController : MonoBehaviour
         state.homeUiUnlocked = false;
         state.homeBoatRotation = Quaternion.identity;
         stateInitialized = true;
+        // Guarantee World's static defeated-obstacle set is clean for a fresh game session.
+        // RuntimeInitializeOnLoadMethod alone is not reliable when domain reload is disabled.
+        World.ResetForNewGame();
         RefreshBoundUi();
     }
 
@@ -967,14 +1022,61 @@ public class VoyageCycleController : MonoBehaviour
 
     void ApplyVoyageCompleteBoatState()
     {
-        if (restoreBoatHomePoseOnReturn)
-        {
-            RestoreHomeBoatPose();
-        }
+        if (boatSinkingStarted) return;
+        if (!TryGetBoatRoot(out Transform boatRoot)) return;
 
-        if (lockBoatUntilSetSail && TryGetBoatRoot(out Transform boatRoot))
+        boatSinkingStarted = true;
+        BeginBoatSinking(boatRoot);
+    }
+
+    void BeginBoatSinking(Transform boatRoot)
+    {
+        // Freeze camera on the boat's current position before it starts sinking
+        BoatFollowCamera followCam = FindFirstObjectByType<BoatFollowCamera>();
+        if (followCam != null) followCam.Freeze();
+
+        // Stop player control without using the full lock (we need physics free to sink)
+        sinkingShipController = boatRoot.GetComponent<ShipController>()
+            ?? boatRoot.GetComponentInParent<ShipController>();
+        if (sinkingShipController != null)
+            sinkingShipController.enabled = false;
+
+        // Disable buoyancy on every part so gravity wins
+        foreach (WaterBuoyancy b in boatRoot.GetComponentsInChildren<WaterBuoyancy>(true))
+            b.enabled = false;
+
+        // Release any existing movement lock and let physics run
+        ReleaseBoatMovementLock();
+
+        Rigidbody rb = boatRoot.GetComponent<Rigidbody>();
+        if (rb != null)
         {
-            LockBoatMovement(boatRoot);
+            rb.constraints = RigidbodyConstraints.None;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+    }
+
+    void EndBoatSinking()
+    {
+        if (!boatSinkingStarted) return;
+        boatSinkingStarted = false;
+
+        // Unfreeze camera so it resumes following when the boat is back at home
+        BoatFollowCamera followCam = FindFirstObjectByType<BoatFollowCamera>();
+        if (followCam != null) followCam.Unfreeze();
+
+        if (!TryGetBoatRoot(out Transform boatRoot)) return;
+
+        // Re-enable buoyancy so the boat floats again at home
+        foreach (WaterBuoyancy b in boatRoot.GetComponentsInChildren<WaterBuoyancy>(true))
+            b.enabled = true;
+
+        // Re-enable ship control; LockBoatMovement will disable it again for the home state
+        if (sinkingShipController != null)
+        {
+            sinkingShipController.enabled = true;
+            sinkingShipController = null;
         }
     }
 
@@ -1130,7 +1232,9 @@ public class VoyageCycleController : MonoBehaviour
 
     void ApplyUiState()
     {
-        if (!IsActiveScene(homeSceneName))
+        // Use the VCC's own scene name, not the Unity active scene, so this works
+        // correctly when the home scene is loaded additively (not yet the active scene).
+        if (gameObject.scene.name != homeSceneName)
         {
             SetGeneratedDayOverDisplayActive(false);
             return;
@@ -1511,20 +1615,23 @@ public class VoyageCycleController : MonoBehaviour
             statsRect.anchorMin = new Vector2(0f, 1f);
             statsRect.anchorMax = new Vector2(1f, 1f);
             statsRect.pivot = new Vector2(0.5f, 1f);
-            statsRect.sizeDelta = new Vector2(0f, 40f);
+            statsRect.sizeDelta = new Vector2(0f, 72f);
             statsRect.anchoredPosition = Vector2.zero;
 
             Image statsBg = statsRoot.GetComponent<Image>();
             statsBg.color = new Color(0f, 0f, 0f, 0.5f);
             statsBg.raycastTarget = false;
 
+            // Day: large, centered across the full bar
             generatedHomeMenuDayLabel = CreateHomeStatLabel("DayLabel", statsRoot.transform,
-                new Vector2(0f, 0f), new Vector2(0.5f, 1f));
-            generatedHomeMenuDayLabel.alignment = TextAlignmentOptions.Left;
+                new Vector2(0f, 0f), new Vector2(1f, 1f), fontSize: 40f, color: Color.white);
+            generatedHomeMenuDayLabel.alignment = TextAlignmentOptions.Center;
 
+            // Gold: left side, medium-large, orange-gold color
             generatedHomeMenuGoldLabel = CreateHomeStatLabel("GoldLabel", statsRoot.transform,
-                new Vector2(0.5f, 0f), new Vector2(1f, 1f));
-            generatedHomeMenuGoldLabel.alignment = TextAlignmentOptions.Right;
+                new Vector2(0f, 0f), new Vector2(0.38f, 1f), fontSize: 26f,
+                color: new Color(1f, 0.78f, 0.1f));
+            generatedHomeMenuGoldLabel.alignment = TextAlignmentOptions.Left;
 
             generatedHomeMenuStatsRoot = statsRoot;
         }
@@ -1533,7 +1640,8 @@ public class VoyageCycleController : MonoBehaviour
         RefreshGeneratedHomeMenuStats();
     }
 
-    TMP_Text CreateHomeStatLabel(string objectName, Transform parent, Vector2 anchorMin, Vector2 anchorMax)
+    TMP_Text CreateHomeStatLabel(string objectName, Transform parent, Vector2 anchorMin, Vector2 anchorMax,
+        float fontSize = 20f, Color? color = null)
     {
         GameObject obj = new GameObject(objectName, typeof(RectTransform), typeof(CanvasRenderer));
         obj.transform.SetParent(parent, false);
@@ -1546,8 +1654,8 @@ public class VoyageCycleController : MonoBehaviour
         rect.pivot = new Vector2(0.5f, 0.5f);
 
         TextMeshProUGUI text = obj.AddComponent<TextMeshProUGUI>();
-        text.fontSize = 20f;
-        text.color = Color.white;
+        text.fontSize = fontSize;
+        text.color = color ?? Color.white;
         text.textWrappingMode = TextWrappingModes.NoWrap;
         text.raycastTarget = false;
         if (TMP_Settings.defaultFontAsset != null)

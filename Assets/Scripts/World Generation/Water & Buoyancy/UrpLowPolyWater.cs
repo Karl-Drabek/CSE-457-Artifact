@@ -72,6 +72,19 @@ public class UrpLowPolyWater : MonoBehaviour
         [Range(0f, 1f)]
         public float steepness;
 
+        [Header("Distance Range")]
+        [Tooltip("Distance from world origin where this wave becomes active. 0 means active from the origin.")]
+        [Min(0f)]
+        public float minActiveDistance;
+
+        [Tooltip("Distance from world origin beyond which this wave is inactive. 0 means no maximum limit.")]
+        [Min(0f)]
+        public float maxActiveDistance;
+
+        [Tooltip("Fade distance at each active boundary. Wave blends in over this range past minActiveDistance and blends out this far before maxActiveDistance.")]
+        [Min(0f)]
+        public float attenuationRange;
+
         public GerstnerWave(Vector2 direction, float amplitude, float waveLength, float speed, float steepness)
         {
             this.direction = direction;
@@ -79,6 +92,9 @@ public class UrpLowPolyWater : MonoBehaviour
             this.waveLength = Mathf.Max(0.001f, waveLength);
             this.speed = speed;
             this.steepness = Mathf.Clamp01(steepness);
+            this.minActiveDistance = 0f;
+            this.maxActiveDistance = 0f;
+            this.attenuationRange = 0f;
         }
     }
 
@@ -286,6 +302,7 @@ public class UrpLowPolyWater : MonoBehaviour
 
     public static bool TryResolveSurfaceAtWorldPosition(Vector3 worldPosition, out UrpLowPolyWater water)
     {
+        // Prefer the chunk that actually contains the position.
         foreach (UrpLowPolyWater candidate in ActiveSurfaces)
         {
             if (candidate == null || !candidate.isActiveAndEnabled)
@@ -300,7 +317,28 @@ public class UrpLowPolyWater : MonoBehaviour
             }
         }
 
-        water = GetAnyActiveSurface();
+        // No exact match — fall back to the nearest chunk by XZ distance so that
+        // border crossings during streaming never produce a buoyancy dead zone.
+        UrpLowPolyWater nearest = null;
+        float nearestDistSq = float.PositiveInfinity;
+        foreach (UrpLowPolyWater candidate in ActiveSurfaces)
+        {
+            if (candidate == null || !candidate.isActiveAndEnabled)
+            {
+                continue;
+            }
+
+            float dx = candidate.transform.position.x - worldPosition.x;
+            float dz = candidate.transform.position.z - worldPosition.z;
+            float distSq = dx * dx + dz * dz;
+            if (distSq < nearestDistSq)
+            {
+                nearestDistSq = distSq;
+                nearest = candidate;
+            }
+        }
+
+        water = nearest;
         return water != null;
     }
 
@@ -431,6 +469,9 @@ public class UrpLowPolyWater : MonoBehaviour
             wave.amplitude = Mathf.Max(0f, wave.amplitude);
             wave.waveLength = Mathf.Max(0.001f, wave.waveLength);
             wave.steepness = Mathf.Clamp01(wave.steepness);
+            wave.minActiveDistance = Mathf.Max(0f, wave.minActiveDistance);
+            wave.maxActiveDistance = Mathf.Max(0f, wave.maxActiveDistance);
+            wave.attenuationRange = Mathf.Max(0f, wave.attenuationRange);
             waves[i] = wave;
         }
     }
@@ -724,15 +765,12 @@ public class UrpLowPolyWater : MonoBehaviour
 
         Vector3 localPosition = transform.InverseTransformPoint(worldPosition);
         Vector2 queryHalfSize = GetQueryableHalfSize();
+        bool withinMeshBounds = Mathf.Abs(localPosition.x) <= queryHalfSize.x
+                             && Mathf.Abs(localPosition.z) <= queryHalfSize.y;
 
-        if (Mathf.Abs(localPosition.x) > queryHalfSize.x || Mathf.Abs(localPosition.z) > queryHalfSize.y)
-        {
-            surfaceHeight = 0f;
-            surfaceNormal = Vector3.up;
-            return false;
-        }
-
-        if (TrySampleRenderedGeneratedPlane(localPosition, out float localSurfaceHeight, out Vector3 localSurfaceNormal))
+        // Prefer the rendered mesh so buoyancy forces match the visible wave surface.
+        // Only attempt this when the point is within the mesh's coverage area.
+        if (withinMeshBounds && TrySampleRenderedGeneratedPlane(localPosition, out float localSurfaceHeight, out Vector3 localSurfaceNormal))
         {
             Vector3 renderedSurfacePoint = new Vector3(
                 localPosition.x,
@@ -744,13 +782,19 @@ public class UrpLowPolyWater : MonoBehaviour
             return true;
         }
 
-        if (clipSamplingToSourceTriangles)
+        // When the rendered mesh fails inside its bounds for a clipped water body (e.g. a lake),
+        // respect the clip flag and report no water outside the actual water triangles.
+        if (withinMeshBounds && clipSamplingToSourceTriangles)
         {
             surfaceHeight = 0f;
             surfaceNormal = Vector3.up;
             return false;
         }
 
+        // Analytic Gerstner fallback: evaluates the wave formula directly in world space so it
+        // gives the correct height at chunk borders, in the wave-displacement padding zone, and
+        // anywhere else the rendered mesh does not have a triangle covering the query point.
+        // This is the correct answer for ocean chunks where the wave surface extends everywhere.
         if (TrySampleAnalyticSurface(localPosition, timeSeconds, out localSurfaceHeight, out localSurfaceNormal))
         {
             Vector3 analyticSurfacePoint = new Vector3(
@@ -991,6 +1035,40 @@ public class UrpLowPolyWater : MonoBehaviour
         return surfacePoint;
     }
 
+    // Returns a [0,1] attenuation for a wave based on its configured distance range.
+    // Returns 0 when the point is outside the active range, 1 when fully inside,
+    // and interpolates across attenuationRange at each boundary.
+    float ComputeWaveDistanceAttenuation(Vector2 worldXZ, GerstnerWave wave)
+    {
+        float dist = worldXZ.magnitude;
+        bool hasMin = wave.minActiveDistance > 0f;
+        bool hasMax = wave.maxActiveDistance > 0f;
+
+        if (hasMin && dist < wave.minActiveDistance) return 0f;
+        if (hasMax && dist > wave.maxActiveDistance) return 0f;
+
+        float attenuation = 1f;
+        float attRange = Mathf.Max(wave.attenuationRange, 0f);
+
+        if (attRange > 0f)
+        {
+            if (hasMin)
+            {
+                float fadeInEnd = wave.minActiveDistance + attRange;
+                if (dist < fadeInEnd)
+                    attenuation *= Mathf.InverseLerp(wave.minActiveDistance, fadeInEnd, dist);
+            }
+            if (hasMax)
+            {
+                float fadeOutStart = Mathf.Max(wave.minActiveDistance, wave.maxActiveDistance - attRange);
+                if (dist > fadeOutStart)
+                    attenuation *= Mathf.InverseLerp(wave.maxActiveDistance, fadeOutStart, dist);
+            }
+        }
+
+        return attenuation;
+    }
+
     // Adds one Gerstner wave contribution into a displaced surface point.
     // Called by EvaluateSurfacePoint while iterating over the configurable wave list.
     void ApplyGerstnerWave(
@@ -1001,7 +1079,13 @@ public class UrpLowPolyWater : MonoBehaviour
         int totalWaveCount,
         World.WaveDistanceProfile waveProfile)
     {
-        float effectiveAmplitude = wave.amplitude * Mathf.Max(waveProfile.heightMultiplier, 0f);
+        float distanceAttenuation = ComputeWaveDistanceAttenuation(worldAnchorXZ, wave);
+        if (distanceAttenuation <= 0f) return;
+
+        float effectiveAmplitude = wave.amplitude
+            * Mathf.Max(waveProfile.heightMultiplier, 0f)
+            * Mathf.Max(waveProfile.globalWaveScale, 0f)
+            * distanceAttenuation;
         if (effectiveAmplitude <= 0f)
         {
             return;
@@ -1257,7 +1341,7 @@ public class UrpLowPolyWater : MonoBehaviour
     {
         if (World.Instance == null)
         {
-            return new World.WaveDistanceProfile(1f, 1f, 0f);
+            return new World.WaveDistanceProfile(1f, 1f, 0f, 1f);
         }
 
         return World.Instance.GetWaveDistanceProfile(new Vector3(worldAnchorXZ.x, sampledBaseHeight, worldAnchorXZ.y));
@@ -1267,7 +1351,7 @@ public class UrpLowPolyWater : MonoBehaviour
     {
         if (World.Instance == null)
         {
-            return new World.WaveDistanceProfile(1f, 1f, 0f);
+            return new World.WaveDistanceProfile(1f, 1f, 0f, 1f);
         }
 
         return World.Instance.GetMaximumWaveDistanceProfile();

@@ -1,8 +1,12 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class BoatPiece : MonoBehaviour
 {
+    /// <summary>Fired when the root hull piece breaks. VoyageCycleController ends the round.</summary>
+    public static event Action OnHullBroken;
+
     [Header("Hierarchy")]
     public BoatPiece parentPiece;
     public List<BoatPiece> childPieces = new List<BoatPiece>();
@@ -86,6 +90,11 @@ public class BoatPiece : MonoBehaviour
 
         isBroken = true;
 
+        if (isRootHull)
+        {
+            OnHullBroken?.Invoke();
+        }
+
         BoatMassManager massManager = GetComponentInParent<BoatMassManager>();
 
         List<BoatPiece> childrenCopy = new List<BoatPiece>(childPieces);
@@ -120,7 +129,7 @@ public class BoatPiece : MonoBehaviour
         rb.isKinematic = false;
         rb.useGravity = true;
 
-        rb.AddForce(Random.insideUnitSphere * breakForce, ForceMode.Impulse);
+        rb.AddForce(UnityEngine.Random.insideUnitSphere * breakForce, ForceMode.Impulse);
 
         Debug.Log(gameObject.name + " broke off.");
 

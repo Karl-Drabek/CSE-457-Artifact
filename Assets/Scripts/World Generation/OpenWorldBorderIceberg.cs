@@ -12,7 +12,7 @@ public class OpenWorldBorderIceberg : MonoBehaviour
             return;
         }
 
-        World.Instance.HandleBorderCollision(gameObject, collision.transform);
+        World.Instance.HandleBorderCollision(gameObject, collision.transform, collision.relativeVelocity.magnitude);
     }
 
     void OnTriggerEnter(Collider other)
