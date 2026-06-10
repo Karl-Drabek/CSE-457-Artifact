@@ -84,7 +84,7 @@ MonoBehaviour:
   waterDrag: 7
   waterAngularDrag: 3
   sampleMode: 0
-  horizontalSampleCount: 20
+  horizontalSampleCount: 4
   verticalSampleCount: 3
   renderedMeshSampleCount: 32
   verticalEdgeInset: 0.08
