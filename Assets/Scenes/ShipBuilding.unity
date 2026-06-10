@@ -1176,6 +1176,7 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 465eec78cb9574643852007b74799916, type: 2}
   - {fileID: 11400000, guid: afeb4e76f0b2ff2469b0ed517c7753f3, type: 2}
   - {fileID: 11400000, guid: 2af27a4cea331ef4883cfba5a6d1a7dd, type: 2}
+  - {fileID: 11400000, guid: d6cc5f19b6be52a4aaad700bdfd6e2f0, type: 2}
   shipRoot: {fileID: 578386930}
   previewMaterial: {fileID: 2100000, guid: 9efdea519ce5aca4c961cb4258af462f, type: 2}
   sailSceneName: SampleScene
