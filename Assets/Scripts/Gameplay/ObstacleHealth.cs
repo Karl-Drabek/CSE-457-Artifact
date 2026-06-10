@@ -13,8 +13,12 @@ public class ObstacleHealth : MonoBehaviour
     [SerializeField, Min(1f)] float maxHealth = 200f;
 
     [Header("Collision Damage")]
-    [Tooltip("Scales how much damage each unit of collision impulse (mass × relative speed) deals. Same amount hits both this obstacle and the boat.")]
+    [Tooltip("Scales how much damage each unit of collision impulse (mass × normal impact speed) deals to this obstacle.")]
     [SerializeField, Min(0f)] float damagePerImpulseUnit = 0.5f;
+    [Tooltip("Scales how much damage each unit of collision impulse deals to the boat. When 0, uses the same value as Damage Per Impulse Unit.")]
+    [SerializeField, Min(0f)] float boatDamagePerImpulseUnit = 0f;
+    [Tooltip("Minimum speed component along the contact normal required before any damage is dealt. Prevents damage from slow grazes.")]
+    [SerializeField, Min(0f)] float minImpactSpeed = 1f;
 
     [Header("Death")]
     [Tooltip("Extra downward impulse applied when the obstacle starts sinking.")]
@@ -29,13 +33,15 @@ public class ObstacleHealth : MonoBehaviour
     public float CurrentHealth => currentHealth;
     public float HealthFraction => maxHealth > 0f ? Mathf.Clamp01(currentHealth / maxHealth) : 0f;
 
-    /// <summary>Called by World when spawning to set health and optional damage scale.</summary>
-    public void Configure(float health, float dmgPerImpulse = 0f)
+    /// <summary>Called by World when spawning to set health and optional damage scales.</summary>
+    public void Configure(float health, float dmgPerImpulse = 0f, float boatDmgPerImpulse = 0f)
     {
         maxHealth = Mathf.Max(1f, health);
         currentHealth = maxHealth;
         if (dmgPerImpulse > 0f)
             damagePerImpulseUnit = dmgPerImpulse;
+        if (boatDmgPerImpulse > 0f)
+            boatDamagePerImpulseUnit = boatDmgPerImpulse;
     }
 
     /// <summary>Called by World to restore persisted health from a previous voyage.</summary>
@@ -60,30 +66,43 @@ public class ObstacleHealth : MonoBehaviour
     {
         if (dead) return;
 
-        // Impulse approximation: mass of the colliding body × relative speed.
-        // Both objects experience this same impulse by Newton's third law.
-        float mass = collision.rigidbody != null ? collision.rigidbody.mass : 1f;
-        float damage = collision.relativeVelocity.magnitude * mass * damagePerImpulseUnit;
+        // Use only the normal component of relative velocity so tangential sliding
+        // doesn't count as damage — only the head-on impact matters.
+        float impactSpeed = NormalImpactSpeed(collision);
+        if (impactSpeed < minImpactSpeed) return;
 
-        if (damage <= 0f) return;
+        float mass = collision.rigidbody != null ? collision.rigidbody.mass : 1f;
+        float obstacleDamage = impactSpeed * mass * damagePerImpulseUnit;
+        float effectiveBoatRate = boatDamagePerImpulseUnit > 0f ? boatDamagePerImpulseUnit : damagePerImpulseUnit;
+        float boatDamage = impactSpeed * mass * effectiveBoatRate;
+
+        if (obstacleDamage <= 0f && boatDamage <= 0f) return;
 
         BoatPiece piece = FindBoatPiece(collision);
-        if (piece != null)
-            piece.TakeDamage(damage);
+        if (piece != null && boatDamage > 0f)
+            piece.TakeDamage(boatDamage);
 
-        TakeDamage(damage);
+        TakeDamage(obstacleDamage);
+    }
+
+    static float NormalImpactSpeed(Collision collision)
+    {
+        if (collision.contactCount == 0) return collision.relativeVelocity.magnitude;
+        return Mathf.Abs(Vector3.Dot(collision.relativeVelocity, collision.GetContact(0).normal));
     }
 
     static BoatPiece FindBoatPiece(Collision collision)
     {
-        // Primary: walk up from the specific collider's GameObject.
-        // Unity sets collision.gameObject to the child collider's object (not the Rigidbody root),
-        // so this finds the exact piece whose collider was touched.
-        BoatPiece piece = collision.gameObject.GetComponentInParent<BoatPiece>();
-        if (piece != null) return piece;
+        // Primary: contact.otherCollider is the exact boat child collider that touched this obstacle.
+        for (int i = 0; i < collision.contactCount; i++)
+        {
+            Collider otherCol = collision.GetContact(i).otherCollider;
+            if (otherCol == null) continue;
+            BoatPiece piece = otherCol.GetComponentInParent<BoatPiece>();
+            if (piece != null) return piece;
+        }
 
-        // Fallback: the colliding surface had no BoatPiece ancestor (e.g. a collider on the
-        // Rigidbody root itself). Find the BoatPiece closest to the actual contact point.
+        // Fallback: collider sits on the Rigidbody root with no BoatPiece ancestor.
         if (collision.rigidbody != null && collision.contactCount > 0)
         {
             Vector3 contact = collision.GetContact(0).point;

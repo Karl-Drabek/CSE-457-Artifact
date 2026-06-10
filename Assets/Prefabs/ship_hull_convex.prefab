@@ -211,12 +211,13 @@ MonoBehaviour:
   childPieces: []
   isRootHull: 0
   isBroken: 0
-  maxDurability: 100
+  maxDurability: 350
   currentDurability: 0
   breakForce: 2
   destroyAfterBreakingSeconds: 3
   pieceMass: 1
   localCenterOfMass: {x: 0, y: 0, z: 0}
+  goldCost: 10
 --- !u!4 &2260770385855002803 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: c7cdab2d9af3c9645a971c77e4e55f8a, type: 3}

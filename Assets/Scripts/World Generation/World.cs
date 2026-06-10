@@ -88,8 +88,10 @@ public class World : MonoBehaviour
         public Sprite compassIcon;
         public int bonusGold;
         [Min(1f)] public float maxHealth;
-        [Tooltip("Scales collision damage applied equally to this obstacle and the boat. Uses the ObstacleHealth default when 0.")]
+        [Tooltip("Scales collision damage applied to this obstacle. Uses the ObstacleHealth default when 0.")]
         [Min(0f)] public float damagePerImpulseUnit;
+        [Tooltip("Scales collision damage applied to the boat when hitting this obstacle. When 0, uses damagePerImpulseUnit.")]
+        [Min(0f)] public float boatDamagePerImpulseUnit;
     }
 
     [Serializable]
@@ -686,11 +688,16 @@ public class World : MonoBehaviour
 
     static BoatPiece FindBoatPieceFromBorderCollision(Collision collision)
     {
-        // collision.gameObject is the Rigidbody root for compound colliders, so
-        // GetComponentInParent won't find child BoatPieces — use contact point instead.
-        BoatPiece piece = collision.gameObject.GetComponentInParent<BoatPiece>();
-        if (piece != null) return piece;
+        // Primary: contact.otherCollider is the exact boat child collider that touched the border.
+        for (int i = 0; i < collision.contactCount; i++)
+        {
+            Collider otherCol = collision.GetContact(i).otherCollider;
+            if (otherCol == null) continue;
+            BoatPiece piece = otherCol.GetComponentInParent<BoatPiece>();
+            if (piece != null) return piece;
+        }
 
+        // Fallback: collider sits on the Rigidbody root with no BoatPiece ancestor.
         if (collision.rigidbody != null && collision.contactCount > 0)
         {
             Vector3 contact = collision.GetContact(0).point;
@@ -1402,7 +1409,7 @@ public class World : MonoBehaviour
             ObstacleHealth health = obstacleObject.GetComponent<ObstacleHealth>();
             if (health == null)
                 health = obstacleObject.AddComponent<ObstacleHealth>();
-            health.Configure(definition.maxHealth, definition.damagePerImpulseUnit);
+            health.Configure(definition.maxHealth, definition.damagePerImpulseUnit, definition.boatDamagePerImpulseUnit);
 
             // Restore health from a previous voyage if the obstacle was already damaged.
             if (persistedObstacleHealth.TryGetValue(obstacleId, out float savedHealth))
@@ -3744,6 +3751,19 @@ public class World : MonoBehaviour
         if (spawnedAsBorderHazard && !previewMode)
         {
             hazardObject.AddComponent<OpenWorldBorderIceberg>();
+        }
+        else if (!previewMode)
+        {
+            // Interior hazards are static by default; give them a kinematic Rigidbody so
+            // OnCollisionEnter fires when the boat strikes them, then add CollisionDamage.
+            if (hazardObject.GetComponent<Rigidbody>() == null)
+            {
+                Rigidbody rb = hazardObject.AddComponent<Rigidbody>();
+                rb.isKinematic = true;
+                rb.useGravity = false;
+            }
+            if (hazardObject.GetComponent<CollisionDamage>() == null)
+                hazardObject.AddComponent<CollisionDamage>();
         }
     }
 
