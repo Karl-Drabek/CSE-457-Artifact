@@ -11,8 +11,26 @@ public class BoatDurabilityUI : MonoBehaviour
     [Header("Update Settings")]
     [SerializeField] private float refreshRate = 0.1f;
 
+    [Header("Layout")]
+    [SerializeField] private int itemsPerColumn = 12;
+    [SerializeField] private int columnWidth = 28;
+
+    [Header("Broken Display")]
+    [SerializeField] private float brokenDisplaySeconds = 2f;
+
     private float nextRefreshTime;
     private readonly StringBuilder builder = new StringBuilder();
+
+    private class PieceUIInfo
+    {
+        public string displayName;
+        public int currentDurability;
+        public int maxDurability;
+        public bool isBroken;
+        public float brokenTime = -1f;
+    }
+
+    private readonly Dictionary<int, PieceUIInfo> pieceInfos = new Dictionary<int, PieceUIInfo>();
 
     void Update()
     {
@@ -34,16 +52,7 @@ public class BoatDurabilityUI : MonoBehaviour
 
         BoatPiece[] pieces = FindObjectsByType<BoatPiece>(FindObjectsSortMode.None);
         Dictionary<string, int> nameCounts = new Dictionary<string, int>();
-
-        builder.Clear();
-        builder.AppendLine("Boat Durability");
-
-        if (pieces.Length == 0)
-        {
-            builder.AppendLine("No boat pieces found.");
-            durabilityText.text = builder.ToString();
-            return;
-        }
+        HashSet<int> seenThisFrame = new HashSet<int>();
 
         foreach (BoatPiece piece in pieces)
         {
@@ -51,6 +60,9 @@ public class BoatDurabilityUI : MonoBehaviour
             {
                 continue;
             }
+
+            int id = piece.GetInstanceID();
+            seenThisFrame.Add(id);
 
             string baseName = piece.gameObject.name.Replace("(Clone)", "").Trim();
 
@@ -63,20 +75,157 @@ public class BoatDurabilityUI : MonoBehaviour
 
             string displayName = baseName + " " + nameCounts[baseName];
 
-            builder.Append(displayName);
-            builder.Append(": ");
-            builder.Append(Mathf.CeilToInt(piece.currentDurability));
-            builder.Append(" / ");
-            builder.Append(Mathf.CeilToInt(piece.maxDurability));
-
-            if (piece.isBroken)
+            if (!pieceInfos.ContainsKey(id))
             {
-                builder.Append(" BROKEN");
+                pieceInfos[id] = new PieceUIInfo();
             }
 
-            builder.AppendLine();
+            PieceUIInfo info = pieceInfos[id];
+
+            info.displayName = displayName;
+            info.currentDurability = Mathf.CeilToInt(piece.currentDurability);
+            info.maxDurability = Mathf.CeilToInt(piece.maxDurability);
+            info.isBroken = piece.isBroken;
+
+            if (piece.isBroken && info.brokenTime < 0f)
+            {
+                info.brokenTime = Time.time;
+            }
+        }
+
+        List<int> idsToRemove = new List<int>();
+
+        foreach (KeyValuePair<int, PieceUIInfo> pair in pieceInfos)
+        {
+            int id = pair.Key;
+            PieceUIInfo info = pair.Value;
+
+            bool pieceStillExists = seenThisFrame.Contains(id);
+
+            if (!pieceStillExists && !info.isBroken)
+            {
+                idsToRemove.Add(id);
+                continue;
+            }
+
+            if (info.isBroken && Time.time - info.brokenTime >= brokenDisplaySeconds)
+            {
+                idsToRemove.Add(id);
+            }
+        }
+
+        foreach (int id in idsToRemove)
+        {
+            pieceInfos.Remove(id);
+        }
+
+        builder.Clear();
+        builder.AppendLine("<b>Boat Durability</b>");
+
+        if (pieceInfos.Count == 0)
+        {
+            builder.AppendLine("No boat pieces found.");
+            durabilityText.text = builder.ToString();
+            return;
+        }
+
+        List<string> lines = new List<string>();
+
+        foreach (PieceUIInfo info in pieceInfos.Values)
+        {
+            string line;
+
+            if (info.isBroken)
+            {
+                line =
+                    "<color=red>" +
+                    info.displayName +
+                    ": BROKEN" +
+                    "</color>";
+            }
+            else
+            {
+                line =
+                    "<color=white>" +
+                    info.displayName +
+                    ": " +
+                    info.currentDurability +
+                    " / " +
+                    info.maxDurability +
+                    "</color>";
+            }
+
+            lines.Add(line);
+        }
+
+        for (int i = 0; i < lines.Count; i += itemsPerColumn)
+        {
+            for (int row = 0; row < itemsPerColumn; row++)
+            {
+                int firstIndex = i + row;
+                int secondIndex = i + itemsPerColumn + row;
+                int thirdIndex = i + itemsPerColumn * 2 + row;
+
+                if (firstIndex < lines.Count)
+                {
+                    builder.Append(PadRichTextLine(lines[firstIndex], columnWidth));
+                }
+
+                if (secondIndex < lines.Count)
+                {
+                    builder.Append(PadRichTextLine(lines[secondIndex], columnWidth));
+                }
+
+                if (thirdIndex < lines.Count)
+                {
+                    builder.Append(lines[thirdIndex]);
+                }
+
+                builder.AppendLine();
+            }
+
+            if (i + itemsPerColumn * 3 < lines.Count)
+            {
+                builder.AppendLine();
+            }
         }
 
         durabilityText.text = builder.ToString();
+    }
+
+    string PadRichTextLine(string text, int width)
+    {
+        string plainText = RemoveRichTextTags(text);
+        int paddingNeeded = Mathf.Max(1, width - plainText.Length);
+
+        return text + new string(' ', paddingNeeded);
+    }
+
+    string RemoveRichTextTags(string text)
+    {
+        bool insideTag = false;
+        StringBuilder plain = new StringBuilder();
+
+        foreach (char c in text)
+        {
+            if (c == '<')
+            {
+                insideTag = true;
+                continue;
+            }
+
+            if (c == '>')
+            {
+                insideTag = false;
+                continue;
+            }
+
+            if (!insideTag)
+            {
+                plain.Append(c);
+            }
+        }
+
+        return plain.ToString();
     }
 }
