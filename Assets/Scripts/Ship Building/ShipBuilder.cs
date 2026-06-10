@@ -6,6 +6,8 @@ using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+using Borodar.FarlandSkies.LowPoly;
+
 
 /// <summary>
 /// Main ship-building controller used by the ShipBuilding scene.
@@ -140,34 +142,7 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Prefer a compatible snap point if one is hovered.
-        //if (TryGetHoveredSnapPoint(out SnapPoint snapPoint)
-        //    && !snapPoint.occupied
-        //    && snapPoint.acceptsPartType == selectedPart.partType)
-        //{
-        //    GameObject snapObj = Instantiate(
-        //        selectedPart.prefab,
-        //        snapPoint.AttachTransform.position,
-        //        snapPoint.AttachTransform.rotation,
-        //        shipRoot);
-
-        //    BoatPiece snapPiece = snapObj.GetComponent<BoatPiece>();
-        //    if (snapPiece != null)
-        //    {
-        //        BoatPiece parentPiece = snapPoint.GetComponentInParent<BoatPiece>();
-        //        snapPiece.AttachTo(parentPiece);
-        //    }
-
-        //    snapPoint.occupied = true;
-        //    SetUpPart(snapObj);
-        //    selectedPart = null;
-        //    DestroyPreview();
-        //    UpdateSnapPointVisibility();
-        //    return;
-        //}
-
-        // Fallback: place directly on any existing BoatPiece (for prefabs without SnapPoints).
-        TryPlacePartOnBoatPiece();
+         TryPlacePartOnBoatPiece();
     }
 
     void TryPlacePartOnBoatPiece()
@@ -203,9 +178,6 @@ public class ShipBuilder : MonoBehaviour
         }
 
         SetUpPart(obj);
-        selectedPart = null;
-        DestroyPreview();
-        //UpdateSnapPointVisibility();
     }
 
     void TryPlaceHull()
@@ -248,30 +220,6 @@ public class ShipBuilder : MonoBehaviour
         SetUpPart(hullObj);
     }
 
-    //bool TryGetHoveredSnapPoint(out SnapPoint snapPoint)
-    //{
-    //    snapPoint = null;
-
-    //    if (Camera.main == null || Mouse.current == null)
-    //    {
-    //        return false;
-    //    }
-
-    //    Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
-    //    if (!Physics.Raycast(ray, out RaycastHit hit))
-    //    {
-    //        return false;
-    //    }
-
-        //snapPoint = hit.collider.GetComponent<SnapPoint>();
-        //if (snapPoint == null)
-        //{
-        //    snapPoint = hit.collider.GetComponentInParent<SnapPoint>();
-        //}
-
-        //return snapPoint != null;
-    //}
-
     void SetUpPart(GameObject obj)
     {
         ApplyMaterial(obj, selectedPart.material);
@@ -299,7 +247,6 @@ public class ShipBuilder : MonoBehaviour
             selectedPart = null;
         }
 
-        //UpdateSnapPointVisibility();
     }
 
     void CreatePreview()
@@ -325,15 +272,8 @@ public class ShipBuilder : MonoBehaviour
             rb.detectCollisions = false;
         }
 
-        //foreach (SnapPoint sp in previewObject.GetComponentsInChildren<SnapPoint>())
-        //{
-        //    sp.enabled = false;
-        //    sp.SetVisible(false);
-        //}
-
         ApplyPreviewMaterial(previewObject);
         previewObject.SetActive(false);
-        //UpdateSnapPointVisibility();
     }
 
     void DestroyPreview()
@@ -359,18 +299,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Prefer a compatible snap point.
-        //SnapPoint snapPoint = hit.collider.GetComponent<SnapPoint>()
-        //    ?? hit.collider.GetComponentInParent<SnapPoint>();
-
-        //if (snapPoint != null && !snapPoint.occupied && snapPoint.acceptsPartType == selectedPart.partType)
-        //{
-        //    previewObject.SetActive(true);
-        //    previewObject.transform.position = snapPoint.AttachTransform.position;
-        //    previewObject.transform.rotation = snapPoint.AttachTransform.rotation;
-        //    return;
-        //}
-
         bool hitsBoatPiece = hit.collider.GetComponentInParent<BoatPiece>() != null;
 
         if (selectedPart.partType == ShipPartType.Hull)
@@ -394,18 +322,6 @@ public class ShipBuilder : MonoBehaviour
             }
         }
     }
-
-    //void UpdateSnapPointVisibility()
-    //{
-    //    SnapPoint[] snapPoints = FindObjectsByType<SnapPoint>(FindObjectsSortMode.None);
-    //    foreach (SnapPoint snapPoint in snapPoints)
-    //    {
-    //        bool shouldShow = selectedPart != null
-    //            && !snapPoint.occupied
-    //            && snapPoint.acceptsPartType == selectedPart.partType;
-    //        snapPoint.SetVisible(shouldShow);
-    //    }
-    //}
 
     void ApplyPreviewMaterial(GameObject target)
     {
@@ -533,22 +449,29 @@ public class ShipBuilder : MonoBehaviour
         selectionPanel.SetActive(true);
     }
 
+    static bool TryGetCycleManager(out SkyboxCycleManager cycleManager)
+    {
+        cycleManager = GameObject.FindAnyObjectByType<SkyboxCycleManager>();
+        return cycleManager != null;
+    }
+
     IEnumerator LoadSailSceneAndTransferBoat()
     {
+        GameObject skybox = GameObject.FindWithTag("Skybox");
+        if (skybox != null && skybox.scene.name == "DontDestroyOnLoad")
+        {
+            Destroy(skybox);
+        }
+
+
         // Prepare and persist the boat before any scene changes.
         MakeBoatPersistent();
+
         // Destroy skybox from build scene
-        GameObject[] existing = GameObject.FindGameObjectsWithTag("Skybox");
-        if (existing.Length > 1)
+        if (TryGetCycleManager(out SkyboxCycleManager cycleManager))
         {
-            for (int i = 0; i < existing.Length; i++)
-            {
-                if (existing[i].scene.name == builderSceneName)
-                {
-                    Destroy(existing[i]);
-                    break;
-                }
-            }
+            cycleManager.CycleProgress = 24f;
+            cycleManager.Paused = false;
         }
 
         AsyncOperation operation = SceneManager.LoadSceneAsync(sailSceneName, LoadSceneMode.Additive);
@@ -569,7 +492,6 @@ public class ShipBuilder : MonoBehaviour
 
         selectedPart = null;
         DestroyPreview();
-        //UpdateSnapPointVisibility();
 
         SceneManager.SetActiveScene(sailScene);
 

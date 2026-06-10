@@ -169,6 +169,7 @@ public class VoyageCycleController : MonoBehaviour
     public float TimeOfDay => GetTimeOfDay();
     public bool VoyageInProgress => state.phase == VoyagePhase.Sailing;
     public bool VoyageHasEnded => state.phase == VoyagePhase.VoyageComplete;
+    static GameObject cachedSkybox = null;
 
     void Awake()
     {
@@ -504,6 +505,13 @@ public class VoyageCycleController : MonoBehaviour
         state.phase = VoyagePhase.EditingShip;
         state.previousTimeOfDay = homeTimeOfDay;
         ApplyHomeTimeAndPause();
+
+        GameObject skybox = GameObject.FindWithTag("Skybox");
+        if (skybox != null)
+        {
+            DontDestroyOnLoad(skybox);
+            cachedSkybox = skybox;
+        }
 
         // Make the current boat persist through the scene load so the builder can adopt it.
         if (TryGetBoatRoot(out Transform boatRoot))

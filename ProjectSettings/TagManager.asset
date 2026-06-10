@@ -6,6 +6,7 @@ TagManager:
   tags:
   - VisualComponent
   - Skybox
+  - SkyboxManager
   layers:
   - Default
   - TransparentFX
