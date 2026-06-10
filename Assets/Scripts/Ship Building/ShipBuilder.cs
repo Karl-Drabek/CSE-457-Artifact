@@ -68,13 +68,20 @@ public class ShipBuilder : MonoBehaviour
         GameObject existingBoat = GameObject.Find("BoatParent");
         if (existingBoat != null && existingBoat.transform != shipRoot)
         {
-            shipRoot = existingBoat.transform;
-            hullPlaced = true;
-
-            Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
-            if (adoptedBody != null)
+            if (existingBoat.GetComponent<BoatMassManager>() != null)
             {
-                adoptedBody.isKinematic = true;
+                shipRoot = existingBoat.transform;
+                hullPlaced = true;
+
+                Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
+                if (adoptedBody != null)
+                {
+                    adoptedBody.isKinematic = true;
+                }
+            }
+            else
+            {
+                Destroy(existingBoat);
             }
         }
     }
@@ -131,6 +138,16 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
+        bool hasRootHull = shipRoot != null
+            && System.Array.Exists(shipRoot.GetComponentsInChildren<BoatPiece>(), p => p.isRootHull && !p.isBroken);
+        if (!hasRootHull)
+        {
+            Debug.Log("Cannot save ship — hull is missing or broken.", this);
+            hullPlaced = false;
+            if (hullButton != null) hullButton.interactable = true;
+            return;
+        }
+
         VoyageCycleController.SetPhaseToHome();
         StartCoroutine(LoadSailSceneAndTransferBoat());
     }
@@ -178,8 +195,8 @@ public class ShipBuilder : MonoBehaviour
 
             snapPoint.occupied = true;
             SetUpPart(snapObj);
-            selectedPart = null;
-            DestroyPreview();
+            //selectedPart = null;
+            //DestroyPreview();
             UpdateSnapPointVisibility();
             return;
         }
