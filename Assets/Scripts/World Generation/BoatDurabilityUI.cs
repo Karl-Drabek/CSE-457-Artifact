@@ -1,214 +1,328 @@
 using System.Collections.Generic;
+using System.Text;
 using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 public class BoatDurabilityUI : MonoBehaviour
 {
     [Header("UI")]
-    [Tooltip("Parent RectTransform that will hold one row per boat piece.")]
-    [SerializeField] private RectTransform barContainer;
-    [SerializeField] private float barHeight = 20f;
-    [SerializeField] private float labelWidth = 140f;
-    [SerializeField] private float fontSize = 17f;
+    [SerializeField] private TextMeshProUGUI durabilityText;
 
     [Header("Update Settings")]
     [SerializeField] private float refreshRate = 0.1f;
 
+    [Header("Layout")]
+    [SerializeField] private int itemsPerColumn = 12;
+    [SerializeField] private int columnWidth = 28;
+
+    [Header("Broken Display")]
+    [SerializeField] private float brokenDisplaySeconds = 2f;
+
+    [Header("Root Hull Game Over")]
+    [SerializeField] private string shipBuildingSceneName = "ShipBuilding";
+    [SerializeField] private float returnToBuilderDelay = 2f;
+    [SerializeField] private string boatParentObjectName = "BoatParent";
+
     private float nextRefreshTime;
+    private bool isReturningToBuilder = false;
 
-    private class HealthBarRow
+    private readonly StringBuilder builder = new StringBuilder();
+
+    private class PieceUIInfo
     {
-        public GameObject root;
-        public TextMeshProUGUI label;
-        public Image fill;
+        public string displayName;
+        public int currentDurability;
+        public int maxDurability;
+        public bool isBroken;
+        public float brokenTime = -1f;
     }
 
-    private readonly Dictionary<BoatPiece, HealthBarRow> _rows = new();
+    private readonly Dictionary<int, PieceUIInfo> pieceInfos = new Dictionary<int, PieceUIInfo>();
 
-    void Awake()
+    private void Update()
     {
-        if (barContainer == null) return;
+        if (Time.time < nextRefreshTime)
+        {
+            return;
+        }
 
-        if (!barContainer.TryGetComponent(out VerticalLayoutGroup vlg))
-            vlg = barContainer.gameObject.AddComponent<VerticalLayoutGroup>();
-        vlg.spacing = 4f;
-        vlg.childAlignment = TextAnchor.UpperLeft;
-        vlg.childForceExpandWidth = true;
-        vlg.childForceExpandHeight = false;
-        vlg.childControlWidth = true;
-        vlg.childControlHeight = true;
-        vlg.padding = new RectOffset(6, 6, 6, 6);
-
-        if (!barContainer.TryGetComponent(out ContentSizeFitter csf))
-            csf = barContainer.gameObject.AddComponent<ContentSizeFitter>();
-        csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-    }
-
-    void Update()
-    {
-        if (Time.time < nextRefreshTime) return;
         nextRefreshTime = Time.time + refreshRate;
-        RefreshDurabilityBars();
+        RefreshDurabilityList();
     }
 
-    void RefreshDurabilityBars()
+    private void RefreshDurabilityList()
     {
-        // barContainer or its RectTransform may be destroyed when the scene changes
-        if (barContainer == null || !barContainer) return;
+        if (durabilityText == null)
+        {
+            return;
+        }
 
         BoatPiece[] pieces = FindObjectsByType<BoatPiece>(FindObjectsSortMode.None);
-        var currentSet = new HashSet<BoatPiece>(pieces);
 
-        // Remove rows for pieces that no longer exist or whose UI was destroyed
-        var toRemove = new List<BoatPiece>();
-        foreach (var kvp in _rows)
-        {
-            if (kvp.Key == null || !currentSet.Contains(kvp.Key) || kvp.Value.root == null || !kvp.Value.root)
-            {
-                if (kvp.Value.root != null && kvp.Value.root) Destroy(kvp.Value.root);
-                toRemove.Add(kvp.Key);
-            }
-        }
-        foreach (var p in toRemove) _rows.Remove(p);
-
-        var nameCounts = new Dictionary<string, int>();
+        List<BoatPiece> sortedPieces = new List<BoatPiece>();
 
         foreach (BoatPiece piece in pieces)
         {
-            if (piece == null) continue;
-
-            string baseName = piece.gameObject.name.Replace("(Clone)", "").Trim();
-            if (!nameCounts.ContainsKey(baseName)) nameCounts[baseName] = 0;
-            nameCounts[baseName]++;
-            string displayName = baseName + " " + nameCounts[baseName];
-
-            if (!_rows.TryGetValue(piece, out HealthBarRow row))
+            if (piece != null)
             {
-                row = CreateRow();
-                _rows[piece] = row;
+                sortedPieces.Add(piece);
+            }
+        }
+
+        sortedPieces.Sort((a, b) =>
+        {
+            string aName = CleanName(a.gameObject.name);
+            string bName = CleanName(b.gameObject.name);
+
+            int aPriority = GetPartPriority(aName);
+            int bPriority = GetPartPriority(bName);
+
+            if (aPriority != bPriority)
+            {
+                return aPriority.CompareTo(bPriority);
             }
 
-            // Skip if the UI row was destroyed (e.g. parent canvas destroyed)
-            if (row.fill == null || !row.fill || row.label == null || !row.label) continue;
+            int nameCompare = string.Compare(aName, bName, System.StringComparison.Ordinal);
 
-            float health = piece.maxDurability > 0f
-                ? Mathf.Clamp01(piece.currentDurability / piece.maxDurability)
-                : 0f;
-
-            row.label.fontSize = fontSize;
-
-            if (piece.isBroken)
+            if (nameCompare != 0)
             {
-                row.label.text = displayName + "  <color=#FF4444>BROKEN</color>";
-                row.fill.rectTransform.anchorMax = new Vector2(0f, 1f);
+                return nameCompare;
+            }
+
+            return a.GetInstanceID().CompareTo(b.GetInstanceID());
+        });
+
+        Dictionary<string, int> nameCounts = new Dictionary<string, int>();
+        HashSet<int> seenThisFrame = new HashSet<int>();
+        List<int> displayOrder = new List<int>();
+
+        foreach (BoatPiece piece in sortedPieces)
+        {
+            int id = piece.GetInstanceID();
+
+            seenThisFrame.Add(id);
+            displayOrder.Add(id);
+
+            string baseName = CleanName(piece.gameObject.name);
+
+            if (!nameCounts.ContainsKey(baseName))
+            {
+                nameCounts[baseName] = 0;
+            }
+
+            nameCounts[baseName]++;
+
+            string displayName = baseName + " " + nameCounts[baseName];
+
+            if (!pieceInfos.ContainsKey(id))
+            {
+                pieceInfos[id] = new PieceUIInfo();
+            }
+
+            PieceUIInfo info = pieceInfos[id];
+
+            info.displayName = displayName;
+            info.currentDurability = Mathf.CeilToInt(piece.currentDurability);
+            info.maxDurability = Mathf.CeilToInt(piece.maxDurability);
+            info.isBroken = piece.isBroken;
+
+            if (piece.isBroken && info.brokenTime < 0f)
+            {
+                info.brokenTime = Time.time;
+            }
+
+            if (piece.isRootHull && piece.isBroken && !isReturningToBuilder)
+            {
+                isReturningToBuilder = true;
+                Invoke(nameof(ReturnToShipBuilder), returnToBuilderDelay);
+            }
+        }
+
+        List<int> idsToRemove = new List<int>();
+
+        foreach (KeyValuePair<int, PieceUIInfo> pair in pieceInfos)
+        {
+            int id = pair.Key;
+            PieceUIInfo info = pair.Value;
+
+            bool pieceStillExists = seenThisFrame.Contains(id);
+
+            if (!pieceStillExists && !info.isBroken)
+            {
+                idsToRemove.Add(id);
+                continue;
+            }
+
+            if (info.isBroken && Time.time - info.brokenTime >= brokenDisplaySeconds)
+            {
+                idsToRemove.Add(id);
+            }
+        }
+
+        foreach (int id in idsToRemove)
+        {
+            pieceInfos.Remove(id);
+        }
+
+        BuildDurabilityText(displayOrder);
+    }
+
+    private void BuildDurabilityText(List<int> displayOrder)
+    {
+        builder.Clear();
+        builder.AppendLine("<b>Boat Durability</b>");
+
+        if (pieceInfos.Count == 0)
+        {
+            builder.AppendLine("No boat pieces found.");
+            durabilityText.text = builder.ToString();
+            return;
+        }
+
+        List<string> lines = new List<string>();
+
+        foreach (int id in displayOrder)
+        {
+            if (!pieceInfos.ContainsKey(id))
+            {
+                continue;
+            }
+
+            PieceUIInfo info = pieceInfos[id];
+
+            string line;
+
+            if (info.isBroken)
+            {
+                line =
+                    "<color=red>" +
+                    info.displayName +
+                    ": BROKEN" +
+                    "</color>";
             }
             else
             {
-                row.label.text = displayName;
-                row.fill.rectTransform.anchorMax = new Vector2(health, 1f);
+                line =
+                    "<color=white>" +
+                    info.displayName +
+                    ": " +
+                    info.currentDurability +
+                    " / " +
+                    info.maxDurability +
+                    "</color>";
+            }
+
+            lines.Add(line);
+        }
+
+        for (int i = 0; i < lines.Count; i += itemsPerColumn)
+        {
+            for (int row = 0; row < itemsPerColumn; row++)
+            {
+                int firstIndex = i + row;
+                int secondIndex = i + itemsPerColumn + row;
+                int thirdIndex = i + itemsPerColumn * 2 + row;
+
+                if (firstIndex < lines.Count)
+                {
+                    builder.Append(PadRichTextLine(lines[firstIndex], columnWidth));
+                }
+
+                if (secondIndex < lines.Count)
+                {
+                    builder.Append(PadRichTextLine(lines[secondIndex], columnWidth));
+                }
+
+                if (thirdIndex < lines.Count)
+                {
+                    builder.Append(lines[thirdIndex]);
+                }
+
+                builder.AppendLine();
+            }
+
+            if (i + itemsPerColumn * 3 < lines.Count)
+            {
+                builder.AppendLine();
             }
         }
+
+        durabilityText.text = builder.ToString();
     }
 
-    static Sprite _roundedSprite;
-
-    static Sprite GetRoundedSprite()
+    private int GetPartPriority(string partName)
     {
-        if (_roundedSprite != null) return _roundedSprite;
+        string lowerName = partName.ToLower();
 
-        const int size = 32;
-        const int radius = 7;
-
-        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
-
-        var pixels = new Color32[size * size];
-        for (int y = 0; y < size; y++)
-            for (int x = 0; x < size; x++)
-                pixels[y * size + x] = new Color32(255, 255, 255, (byte)(RoundedRectAlpha(x, y, size, size, radius) * 255));
-
-        tex.SetPixels32(pixels);
-        tex.Apply();
-
-        _roundedSprite = Sprite.Create(
-            tex,
-            new Rect(0, 0, size, size),
-            new Vector2(0.5f, 0.5f),
-            100f, 0,
-            SpriteMeshType.FullRect,
-            new Vector4(radius, radius, radius, radius));
-
-        return _roundedSprite;
-    }
-
-    static float RoundedRectAlpha(int x, int y, int w, int h, int r)
-    {
-        bool inL = x < r, inR = x >= w - r, inB = y < r, inT = y >= h - r;
-        if ((inL || inR) && (inB || inT))
+        if (lowerName.Contains("hull") || lowerName.Contains("raft"))
         {
-            float cx = inL ? r : w - r - 1;
-            float cy = inB ? r : h - r - 1;
-            float dist = Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
-            return Mathf.Clamp01(r - dist + 0.5f);
+            return 0;
         }
-        return 1f;
+
+        if (lowerName.Contains("mast"))
+        {
+            return 1;
+        }
+
+        if (lowerName.Contains("sail"))
+        {
+            return 2;
+        }
+
+        return 3;
     }
 
-    HealthBarRow CreateRow()
+    private string CleanName(string objectName)
     {
-        // Horizontal row
-        var rowGo = new GameObject("HealthBarRow", typeof(RectTransform));
-        rowGo.transform.SetParent(barContainer, false);
+        return objectName.Replace("(Clone)", "").Trim();
+    }
 
-        var hlg = rowGo.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 8f;
-        hlg.childAlignment = TextAnchor.MiddleLeft;
-        hlg.childForceExpandWidth = false;
-        hlg.childForceExpandHeight = true;
-        hlg.childControlWidth = true;
-        hlg.childControlHeight = true;
+    private void ReturnToShipBuilder()
+    {
+        GameObject boatParent = GameObject.Find(boatParentObjectName);
 
-        var rowLe = rowGo.AddComponent<LayoutElement>();
-        rowLe.minHeight = barHeight;
-        rowLe.preferredHeight = barHeight;
+        if (boatParent != null)
+        {
+            Destroy(boatParent);
+        }
 
-        // Label
-        var labelGo = new GameObject("Label", typeof(RectTransform));
-        labelGo.transform.SetParent(rowGo.transform, false);
-        var labelText = labelGo.AddComponent<TextMeshProUGUI>();
-        labelText.fontSize = fontSize;
-        labelText.alignment = TextAlignmentOptions.MidlineLeft;
-        labelText.color = Color.white;
-        labelText.textWrappingMode = TextWrappingModes.NoWrap;
-        var labelLe = labelGo.AddComponent<LayoutElement>();
-        labelLe.minWidth = labelWidth;
-        labelLe.preferredWidth = labelWidth;
-        labelLe.flexibleWidth = 0f;
+        SceneManager.LoadScene(shipBuildingSceneName, LoadSceneMode.Single);
+    }
 
-        // Bar background — rounded corners generated from code, Mask clips the fill
-        var bgGo = new GameObject("BarBackground", typeof(RectTransform));
-        bgGo.transform.SetParent(rowGo.transform, false);
-        var bgImg = bgGo.AddComponent<Image>();
-        bgImg.sprite = GetRoundedSprite();
-        bgImg.type = Image.Type.Sliced;
-        bgImg.color = new Color(0.75f, 0.1f, 0.1f, 1f);
-        var bgMask = bgGo.AddComponent<Mask>();
-        bgMask.showMaskGraphic = true;
-        var bgLe = bgGo.AddComponent<LayoutElement>();
-        bgLe.flexibleWidth = 1f;
-        bgLe.minHeight = barHeight;
+    private string PadRichTextLine(string text, int width)
+    {
+        string plainText = RemoveRichTextTags(text);
+        int paddingNeeded = Mathf.Max(1, width - plainText.Length);
 
-        // Fill — green rect clipped to the rounded container
-        var fillGo = new GameObject("Fill", typeof(RectTransform));
-        fillGo.transform.SetParent(bgGo.transform, false);
-        var fillImg = fillGo.AddComponent<Image>();
-        fillImg.color = new Color(0.2f, 0.8f, 0.25f);
-        var fillRT = fillGo.GetComponent<RectTransform>();
-        fillRT.anchorMin = Vector2.zero;
-        fillRT.anchorMax = Vector2.one;
-        fillRT.offsetMin = Vector2.zero;
-        fillRT.offsetMax = Vector2.zero;
+        return text + new string(' ', paddingNeeded);
+    }
 
-        return new HealthBarRow { root = rowGo, label = labelText, fill = fillImg };
+    private string RemoveRichTextTags(string text)
+    {
+        bool insideTag = false;
+        StringBuilder plain = new StringBuilder();
+
+        foreach (char c in text)
+        {
+            if (c == '<')
+            {
+                insideTag = true;
+                continue;
+            }
+
+            if (c == '>')
+            {
+                insideTag = false;
+                continue;
+            }
+
+            if (!insideTag)
+            {
+                plain.Append(c);
+            }
+        }
+
+        return plain.ToString();
     }
 }

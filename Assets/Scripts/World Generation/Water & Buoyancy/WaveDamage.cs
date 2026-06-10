@@ -5,6 +5,9 @@ public class WaveDamageManager : MonoBehaviour
     [Header("Water")]
     [SerializeField] private UrpLowPolyWater water;
 
+    [Header("Damage State")]
+    [SerializeField] private bool damageEnabled = false;
+
     [Header("Base Damage")]
     [SerializeField] private float damagePerSecond = 3f;
 
@@ -27,24 +30,26 @@ public class WaveDamageManager : MonoBehaviour
     [Header("Sampling")]
     [SerializeField] private bool damageBrokenPieces = false;
 
-    void Awake()
+    private void Awake()
     {
-        if (water == null)
-        {
-            water = UrpLowPolyWater.ActiveSurface;
-        }
-
-        if (water == null)
-        {
-            water = FindAnyObjectByType<UrpLowPolyWater>();
-        }
+        TryFindWater();
     }
 
-    void Update()
+    private void Update()
     {
-        if (water == null)
+        if (!damageEnabled)
         {
             return;
+        }
+
+        if (water == null)
+        {
+            TryFindWater();
+
+            if (water == null)
+            {
+                return;
+            }
         }
 
         BoatPiece[] pieces = FindObjectsByType<BoatPiece>(FindObjectsSortMode.None);
@@ -55,7 +60,32 @@ public class WaveDamageManager : MonoBehaviour
         }
     }
 
-    void DamagePieceFromWater(BoatPiece piece)
+    public void StartDamage()
+    {
+        damageEnabled = true;
+    }
+
+    public void StopDamage()
+    {
+        damageEnabled = false;
+    }
+
+    private void TryFindWater()
+    {
+        if (water != null)
+        {
+            return;
+        }
+
+        water = UrpLowPolyWater.ActiveSurface;
+
+        if (water == null)
+        {
+            water = FindAnyObjectByType<UrpLowPolyWater>(FindObjectsInactive.Include);
+        }
+    }
+
+    private void DamagePieceFromWater(BoatPiece piece)
     {
         if (piece == null)
         {
@@ -101,7 +131,7 @@ public class WaveDamageManager : MonoBehaviour
         }
     }
 
-    float GetDamageForCollider(Collider col, Rigidbody rb)
+    private float GetDamageForCollider(Collider col, Rigidbody rb)
     {
         Bounds bounds = col.bounds;
 
@@ -133,7 +163,7 @@ public class WaveDamageManager : MonoBehaviour
         return damage / samplePoints.Length;
     }
 
-    float GetDamageForPoint(Vector3 worldPoint, Rigidbody rb)
+    private float GetDamageForPoint(Vector3 worldPoint, Rigidbody rb)
     {
         bool foundSurface = water.TryGetSurfaceDataAtWorldPosition(
             worldPoint,
@@ -168,12 +198,10 @@ public class WaveDamageManager : MonoBehaviour
 
         if (useNormalImpactOnly)
         {
-            // Measures how hard the piece is moving into the water surface.
             impactSpeed = Mathf.Max(0f, -Vector3.Dot(relativeVelocity, waterNormal.normalized));
         }
         else
         {
-            // Counts all relative motion through the water.
             impactSpeed = relativeVelocity.magnitude;
         }
 
@@ -187,7 +215,6 @@ public class WaveDamageManager : MonoBehaviour
         }
         else
         {
-            // If the piece is calmly submerged, give it much less damage.
             impactFactor = 0.2f;
         }
 

@@ -11,7 +11,7 @@ using Borodar.FarlandSkies.LowPoly;
 /// <summary>
 /// Main ship-building controller used by the ShipBuilding scene.
 /// It handles part selection, preview placement, snap-point placement,
-/// and moving the finished boat into the sail scene.
+/// gold spending, and moving the finished boat into the sail scene.
 /// </summary>
 public class ShipBuilder : MonoBehaviour
 {
@@ -28,6 +28,11 @@ public class ShipBuilder : MonoBehaviour
     [SerializeField] string sailSceneName = "SampleScene";
     [SerializeField] string builderSceneName = "ShipBuilding";
 
+    [Header("Gold UI")]
+    [SerializeField] TMP_Text goldText;
+    [SerializeField] string goldTextFormat = "Gold: {0}";
+    [SerializeField] TMP_Text goldMessageText;
+    [SerializeField] float goldMessageSeconds = 1.5f;
 
     [Header("UI Elements")]
     [SerializeField] Button hullButton;
@@ -37,9 +42,13 @@ public class ShipBuilder : MonoBehaviour
     ShipPartDefinition selectedPart;
     GameObject previewObject;
     bool hullPlaced;
+
     Vector3[] buoyancy_vertices = { };
     Vector3 hull_base_point = Vector3.zero;
     Vector3 hull_top_point = Vector3.zero;
+
+    float goldMessageHideTime = -1f;
+
     const string VISUAL = "VisualComponent";
 
     void Awake()
@@ -49,39 +58,44 @@ public class ShipBuilder : MonoBehaviour
             selectionPanel.SetActive(false);
         }
 
-        // If a persistent boat already exists (player returned from sailing), adopt it —
-        // but only if it still has a BoatMassManager (hull intact). If the hull broke,
-        // BoatMassManager was removed; treat that remnant as destroyed and start fresh.
+        if (goldMessageText != null)
+        {
+            goldMessageText.text = "";
+        }
+
+        RefreshGoldUi();
+
         GameObject existingBoat = GameObject.Find("BoatParent");
         if (existingBoat != null && existingBoat.transform != shipRoot)
         {
-            if (existingBoat.GetComponent<BoatMassManager>() != null)
-            {
-                shipRoot = existingBoat.transform;
-                hullPlaced = true;
+            shipRoot = existingBoat.transform;
+            hullPlaced = true;
 
-                Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
-                if (adoptedBody != null)
-                {
-                    adoptedBody.isKinematic = true;
-                }
-            }
-            else
+            Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
+            if (adoptedBody != null)
             {
-                // Hull was destroyed — clean up the rootless remnant so it doesn't linger.
-                Destroy(existingBoat);
+                adoptedBody.isKinematic = true;
             }
         }
     }
 
     void Update()
     {
+        RefreshGoldUi();
+
+        if (goldMessageText != null && goldMessageHideTime > 0f && Time.time >= goldMessageHideTime)
+        {
+            goldMessageText.text = "";
+            goldMessageHideTime = -1f;
+        }
+
         if (Mouse.current == null)
         {
             return;
         }
 
         bool pointerOverUi = IsPointerOverUi();
+
         if (!pointerOverUi)
         {
             UpdatePreviewPosition();
@@ -97,9 +111,6 @@ public class ShipBuilder : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Called by the part-selection UI.
-    /// </summary>
     public void SelectPart(int index)
     {
         if (index < 0 || index >= availableParts.Length)
@@ -112,10 +123,6 @@ public class ShipBuilder : MonoBehaviour
         CreatePreview();
     }
 
-    /// <summary>
-    /// Called by the Save Ship button in the builder scene.
-    /// The method name is kept for the existing scene button hookup.
-    /// </summary>
     public void SwitchToSailScene()
     {
         if (!hullPlaced)
@@ -124,8 +131,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Ensure the voyage state is Home so HandleSceneLoaded initialises the sail
-        // scene correctly (locks the boat at spawn, shows home menu, etc.).
         VoyageCycleController.SetPhaseToHome();
         StartCoroutine(LoadSailSceneAndTransferBoat());
     }
@@ -137,7 +142,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Hull is the first piece — place it anywhere on the ground via a plain raycast.
         if (selectedPart.partType == ShipPartType.Hull)
         {
             TryPlaceHull();
@@ -150,11 +154,15 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Prefer a compatible snap point if one is hovered.
         if (TryGetHoveredSnapPoint(out SnapPoint snapPoint)
             && !snapPoint.occupied
             && snapPoint.acceptsPartType == selectedPart.partType)
         {
+            if (!TrySpendGoldForSelectedPart())
+            {
+                return;
+            }
+
             GameObject snapObj = Instantiate(
                 selectedPart.prefab,
                 snapPoint.AttachTransform.position,
@@ -176,7 +184,6 @@ public class ShipBuilder : MonoBehaviour
             return;
         }
 
-        // Fallback: place directly on any existing BoatPiece (for prefabs without SnapPoints).
         TryPlacePartOnBoatPiece();
     }
 
@@ -188,6 +195,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
+
         if (!Physics.Raycast(ray, out RaycastHit hit))
         {
             return;
@@ -195,6 +203,11 @@ public class ShipBuilder : MonoBehaviour
 
         BoatPiece targetPiece = hit.collider.GetComponentInParent<BoatPiece>();
         if (targetPiece == null)
+        {
+            return;
+        }
+
+        if (!TrySpendGoldForSelectedPart())
         {
             return;
         }
@@ -232,13 +245,18 @@ public class ShipBuilder : MonoBehaviour
         }
 
         Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
+
         if (!Physics.Raycast(ray, out RaycastHit hit))
         {
             return;
         }
 
-        // Don't place on an existing boat piece
         if (hit.collider.GetComponentInParent<BoatPiece>() != null)
+        {
+            return;
+        }
+
+        if (!TrySpendGoldForSelectedPart())
         {
             return;
         }
@@ -282,6 +300,112 @@ public class ShipBuilder : MonoBehaviour
         return snapPoint != null;
     }
 
+    bool TrySpendGoldForSelectedPart()
+    {
+        if (selectedPart == null)
+        {
+            return false;
+        }
+
+        int cost = GetSelectedPartGoldCost();
+
+        if (!VoyageCycleController.TrySpendGold(cost))
+        {
+            ShowGoldMessage("Not enough gold");
+            RefreshGoldUi();
+            RefreshSelectionButtons();
+            return false;
+        }
+
+        RefreshGoldUi();
+        RefreshSelectionButtons();
+        return true;
+    }
+
+    int GetSelectedPartGoldCost()
+    {
+        return GetPartGoldCost(selectedPart);
+    }
+
+    int GetPartGoldCost(ShipPartDefinition part)
+    {
+        if (part == null || part.prefab == null)
+        {
+            return 0;
+        }
+
+        BoatPiece boatPiece = part.prefab.GetComponent<BoatPiece>();
+
+        if (boatPiece == null)
+        {
+            return 0;
+        }
+
+        return Mathf.Max(0, boatPiece.goldCost);
+    }
+
+    bool CanAffordPart(ShipPartDefinition part)
+    {
+        if (part == null)
+        {
+            return false;
+        }
+
+        return VoyageCycleController.CanAffordGold(GetPartGoldCost(part));
+    }
+
+    void RefreshGoldUi()
+    {
+        if (goldText == null)
+        {
+            return;
+        }
+
+        goldText.text = string.Format(goldTextFormat, VoyageCycleController.GetGoldAmount());
+    }
+
+    void ShowGoldMessage(string message)
+    {
+        if (goldMessageText == null)
+        {
+            Debug.Log(message, this);
+            return;
+        }
+
+        goldMessageText.text = message;
+        goldMessageHideTime = Time.time + goldMessageSeconds;
+    }
+
+    void RefreshSelectionButtons()
+    {
+        if (selectionPanel == null || !selectionPanel.activeSelf)
+        {
+            return;
+        }
+
+        foreach (Button button in selectionPanel.GetComponentsInChildren<Button>())
+        {
+            TextMeshProUGUI text = button.GetComponentInChildren<TextMeshProUGUI>();
+            if (text == null)
+            {
+                continue;
+            }
+
+            for (int i = 0; i < availableParts.Length; i++)
+            {
+                ShipPartDefinition part = availableParts[i];
+                int cost = GetPartGoldCost(part);
+                string expectedText = part.displayName + " - " + cost + "g";
+
+                if (text.text == expectedText)
+                {
+                    button.interactable = CanAffordPart(part);
+                    break;
+                }
+            }
+        }
+    }
+
     void SetUpPart(GameObject obj)
     {
         ApplyMaterial(obj, selectedPart.material);
@@ -296,14 +420,17 @@ public class ShipBuilder : MonoBehaviour
         if (selectedPart.partType == ShipPartType.Hull)
         {
             hullPlaced = true;
+
             if (hullButton != null)
             {
                 hullButton.interactable = false;
             }
+
             if (selectionPanel != null)
             {
                 selectionPanel.SetActive(false);
             }
+
             GetHullMeshPoints(obj.GetComponentInChildren<MeshFilter>());
             DestroyPreview();
             selectedPart = null;
@@ -363,6 +490,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         Ray ray = Camera.main.ScreenPointToRay(Mouse.current.position.ReadValue());
+
         if (!Physics.Raycast(ray, out RaycastHit hit))
         {
             previewObject.SetActive(false);
@@ -385,8 +513,8 @@ public class ShipBuilder : MonoBehaviour
 
         if (selectedPart.partType == ShipPartType.Hull)
         {
-            // Hull preview only on non-boat surfaces.
             previewObject.SetActive(!hitsBoatPiece);
+
             if (!hitsBoatPiece)
             {
                 previewObject.transform.position = hit.point;
@@ -395,8 +523,8 @@ public class ShipBuilder : MonoBehaviour
         }
         else
         {
-            // Non-hull preview only when hovering over an existing BoatPiece.
             previewObject.SetActive(hitsBoatPiece);
+
             if (hitsBoatPiece)
             {
                 previewObject.transform.position = hit.point;
@@ -438,6 +566,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         bool appliedAny = false;
+
         foreach (Renderer rend in target.GetComponentsInChildren<Renderer>())
         {
             if (rend.CompareTag(VISUAL))
@@ -447,7 +576,6 @@ public class ShipBuilder : MonoBehaviour
             }
         }
 
-        // No VISUAL-tagged renderer found — apply to every renderer so the material is never silently skipped.
         if (!appliedAny)
         {
             foreach (Renderer rend in target.GetComponentsInChildren<Renderer>())
@@ -457,7 +585,6 @@ public class ShipBuilder : MonoBehaviour
         }
     }
 
-    // Get all mesh points on the hull with respect to the hull mesh.
     void GetHullMeshPoints(MeshFilter meshFilter)
     {
         if (meshFilter == null || meshFilter.sharedMesh == null)
@@ -473,6 +600,7 @@ public class ShipBuilder : MonoBehaviour
         for (int i = 0; i < normals.Length; i++)
         {
             Vector3 worldPoint = meshTransform.TransformPoint(vertices[i]);
+
             if (!worldPointsOnHull.Contains(worldPoint))
             {
                 worldPointsOnHull.Add(worldPoint);
@@ -484,7 +612,6 @@ public class ShipBuilder : MonoBehaviour
         hull_top_point  = meshTransform.TransformPoint(meshFilter.sharedMesh.bounds.max);
     }
 
-    // Transform the hull points to root space and assign as manual buoyancy sample points.
     void ApplyHullMeshPoints(WaterBuoyancy buoyancy)
     {
         if (buoyancy == null || buoyancy_vertices == null || buoyancy_vertices.Length == 0)
@@ -504,7 +631,6 @@ public class ShipBuilder : MonoBehaviour
         buoyancy.SetManualPoints(buoyancy_vertices, hull_base_point.y);
     }
 
-    // Unity doesnt support enums passed into on clicks so we need these for the in scene buttons to call
     public void BuildHullSelectionPanel()
     {
         BuildPartSelectionPanel(ShipPartType.Hull);
@@ -520,7 +646,6 @@ public class ShipBuilder : MonoBehaviour
         BuildPartSelectionPanel(ShipPartType.Sail);
     }
 
-    // Build out selectable parts of the type associated with the clicked button
     void BuildPartSelectionPanel(ShipPartType partType)
     {
         foreach (Transform child in selectionPanel.transform)
@@ -531,14 +656,27 @@ public class ShipBuilder : MonoBehaviour
         for (int i = 0; i < availableParts.Length; i++)
         {
             ShipPartDefinition part = availableParts[i];
+
             if (part.partType == partType)
             {
                 GameObject buttObj = Instantiate(buttPrefab, selectionPanel.transform);
                 Button butt = buttObj.GetComponent<Button>();
                 TextMeshProUGUI buttText = butt.GetComponentInChildren<TextMeshProUGUI>();
-                buttText.text = part.displayName;
-                int index = i;
-                butt.onClick.AddListener(() => SelectPart(index));
+
+                int cost = GetPartGoldCost(part);
+
+                if (buttText != null)
+                {
+                    buttText.text = part.displayName + " - " + cost + "g";
+                }
+
+                if (butt != null)
+                {
+                    butt.interactable = CanAffordPart(part);
+
+                    int index = i;
+                    butt.onClick.AddListener(() => SelectPart(index));
+                }
             }
         }
 
@@ -547,18 +685,16 @@ public class ShipBuilder : MonoBehaviour
 
     IEnumerator LoadSailSceneAndTransferBoat()
     {
-        // Destroy the skybox that was persisted from the sail scene (DontDestroyOnLoad)
-        // so we don't end up with two skyboxes when the sail scene loads its own.
-        GameObject persistedSkybox = GameObject.FindWithTag("Skybox");
-        if (persistedSkybox != null && persistedSkybox.scene.name == "DontDestroyOnLoad")
+        GameObject skybox = GameObject.FindWithTag("Skybox");
+
+        if (skybox != null && skybox.scene.name == "DontDestroyOnLoad")
         {
-            Destroy(persistedSkybox);
+            Destroy(skybox);
         }
 
-        // Prepare and persist the boat before any scene changes.
         MakeBoatPersistent();
 
-        // Reset the skybox cycle manager so it starts fresh in the sail scene.
+
         if (TryGetCycleManager(out SkyboxCycleManager cycleManager))
         {
             cycleManager.CycleProgress = 24f;
@@ -569,6 +705,7 @@ public class ShipBuilder : MonoBehaviour
         yield return operation;
 
         Scene sailScene = SceneManager.GetSceneByName(sailSceneName);
+
         if (!sailScene.isLoaded)
         {
             Debug.LogWarning("Sail scene did not load: " + sailSceneName, this);
@@ -576,6 +713,7 @@ public class ShipBuilder : MonoBehaviour
         }
 
         Camera builderCamera = Camera.main;
+
         if (builderCamera != null)
         {
             builderCamera.gameObject.SetActive(false);
@@ -588,6 +726,7 @@ public class ShipBuilder : MonoBehaviour
         SceneManager.SetActiveScene(sailScene);
 
         BoatFollowCamera followCamera = FindAnyObjectByType<BoatFollowCamera>();
+
         if (followCamera != null)
         {
             followCamera.target = shipRoot;
@@ -603,37 +742,47 @@ public class ShipBuilder : MonoBehaviour
             shipRoot.SetParent(null);
         }
 
-        shipRoot.gameObject.name = "BoatParent"; // Found by VoyageCycleController and World by this name
+        shipRoot.gameObject.name = "BoatParent";
         NormalizeBoatRoot();
         PrepareBoatForSailing();
         DontDestroyOnLoad(shipRoot.gameObject);
     }
 
-    // Moves shipRoot to the world-space center of all child renderers, then shifts
-    // direct children back by the same delta so nothing moves visually. This ensures
-    // the camera (which tracks shipRoot) points at the actual geometric center of the boat.
     void NormalizeBoatRoot()
     {
         Renderer[] renderers = shipRoot.GetComponentsInChildren<Renderer>();
-        if (renderers.Length == 0) return;
+
+        if (renderers.Length == 0)
+        {
+            return;
+        }
 
         Bounds combined = renderers[0].bounds;
+
         for (int i = 1; i < renderers.Length; i++)
+        {
             combined.Encapsulate(renderers[i].bounds);
+        }
 
         Vector3 delta = combined.center - shipRoot.position;
-        if (delta.sqrMagnitude < 0.0001f) return;
+
+        if (delta.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
 
         shipRoot.position += delta;
+
         foreach (Transform child in shipRoot)
+        {
             child.localPosition -= delta;
+        }
     }
 
-    // Adds the runtime components the sailing scene expects. This only happens
-    // when the player saves the builder result into the main scene.
     void PrepareBoatForSailing()
     {
         Rigidbody body = shipRoot.GetComponent<Rigidbody>();
+
         if (body == null)
         {
             body = shipRoot.gameObject.AddComponent<Rigidbody>();
@@ -643,21 +792,24 @@ public class ShipBuilder : MonoBehaviour
         body.useGravity = true;
         body.linearVelocity = Vector3.zero;
         body.angularVelocity = Vector3.zero;
-        // Freeze until VoyageCycleController releases the lock when SetSail is pressed.
         body.constraints = RigidbodyConstraints.FreezeAll;
 
         BoatMassManager massManager = shipRoot.GetComponent<BoatMassManager>();
+
         if (massManager == null)
         {
             massManager = shipRoot.gameObject.AddComponent<BoatMassManager>();
         }
+
         massManager.RecalculateMass();
 
         WaterBuoyancy buoyancy = shipRoot.GetComponent<WaterBuoyancy>();
+
         if (buoyancy == null)
         {
             buoyancy = shipRoot.gameObject.AddComponent<WaterBuoyancy>();
         }
+
         ApplyHullMeshPoints(buoyancy);
 
         if (shipRoot.GetComponent<ShipController>() == null)

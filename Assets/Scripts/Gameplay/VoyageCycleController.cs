@@ -111,7 +111,7 @@ public class VoyageCycleController : MonoBehaviour
 
     [Header("Starting Values")]
     [SerializeField, Min(1)] int startingDayNumber = 1;
-    [SerializeField, Min(0)] int startingGold = 0;
+    [SerializeField, Min(0)] int startingGold = 100;
 
     [Header("Day Cycle")]
     [SerializeField, Range(0f, 100f)] float homeTimeOfDay = 12f;
@@ -254,10 +254,71 @@ public class VoyageCycleController : MonoBehaviour
         return state.dayNumber;
     }
 
-    public int GetGold()
+    public static int GetGoldAmount()
     {
+        EnsureStaticStateInitialized();
         return state.gold;
     }
+
+    public static bool CanAffordGold(int amount)
+    {
+        EnsureStaticStateInitialized();
+        amount = Mathf.Max(0, amount);
+        return state.gold >= amount;
+    }
+
+    public static bool TrySpendGold(int amount)
+    {
+        EnsureStaticStateInitialized();
+
+        amount = Mathf.Max(0, amount);
+
+        if (state.gold < amount)
+        {
+            Debug.Log("Not enough gold. Need " + amount + ", have " + state.gold + ".");
+            return false;
+        }
+
+        state.gold -= amount;
+        return true;
+    }
+
+    public static void AddGold(int amount)
+    {
+        EnsureStaticStateInitialized();
+        state.gold += Mathf.Max(0, amount);
+    }
+
+    private static void EnsureStaticStateInitialized()
+    {
+        if (stateInitialized)
+        {
+            return;
+        }
+
+        state.dayNumber = 1;
+        state.gold = 100;
+        state.lastVoyageReward = 0;
+        state.lastVoyageBonusGold = 0;
+        state.lastVoyageMaxDistance = 0f;
+        state.lastVoyageDestroyedObstacleCount = 0;
+        state.lastVoyageConfiguredObstacleCount = 0;
+        state.currentObjectiveIndex = 0;
+        state.lastVoyageObjectiveCompleted = false;
+        state.lastVoyageInitialDistanceToObjective = 0f;
+        state.lastVoyageMinDistanceToObjective = 0f;
+        state.lastVoyageObjectiveName = string.Empty;
+        state.needsInitialDistanceCapture = false;
+        state.previousTimeOfDay = 12f;
+        state.phase = VoyagePhase.Home;
+        state.obstacleResetPending = false;
+        state.homePoseCaptured = false;
+        state.homeUiUnlocked = false;
+        state.homeBoatRotation = Quaternion.identity;
+
+        stateInitialized = true;
+    }
+
 
     public string GetDayDisplayText()
     {
