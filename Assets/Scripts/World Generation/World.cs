@@ -699,8 +699,12 @@ public class World : MonoBehaviour
             float nearestSqr = float.MaxValue;
             foreach (BoatPiece p in all)
             {
-                float sqr = (p.transform.position - contact).sqrMagnitude;
-                if (sqr < nearestSqr) { nearestSqr = sqr; nearest = p; }
+                foreach (Collider col in p.GetComponentsInChildren<Collider>())
+                {
+                    if (col.isTrigger) continue;
+                    float sqr = (col.ClosestPoint(contact) - contact).sqrMagnitude;
+                    if (sqr < nearestSqr) { nearestSqr = sqr; nearest = p; }
+                }
             }
             return nearest;
         }

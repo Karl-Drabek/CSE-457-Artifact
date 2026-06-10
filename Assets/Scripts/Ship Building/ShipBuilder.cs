@@ -65,18 +65,24 @@ public class ShipBuilder : MonoBehaviour
 
         RefreshGoldUi();
 
+        Vector3 builderAnchorPosition = shipRoot != null ? shipRoot.position : Vector3.zero;
+        Quaternion builderAnchorRotation = shipRoot != null ? shipRoot.rotation : Quaternion.identity;
+
         GameObject existingBoat = GameObject.Find("BoatParent");
         if (existingBoat != null && existingBoat.transform != shipRoot)
         {
             if (existingBoat.GetComponent<BoatMassManager>() != null)
             {
                 shipRoot = existingBoat.transform;
+                shipRoot.SetPositionAndRotation(builderAnchorPosition, builderAnchorRotation);
                 hullPlaced = true;
 
                 Rigidbody adoptedBody = shipRoot.GetComponent<Rigidbody>();
                 if (adoptedBody != null)
                 {
                     adoptedBody.isKinematic = true;
+                    adoptedBody.linearVelocity = Vector3.zero;
+                    adoptedBody.angularVelocity = Vector3.zero;
                 }
             }
             else
